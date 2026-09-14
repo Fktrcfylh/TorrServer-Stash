@@ -23,6 +23,7 @@ udp://explodie.org:6969/announce
 wss://tracker.btorrent.xyz
 wss://tracker.openwebtorrent.com`,
   TorrentDisconnectTimeout: 30,
+  DefaultPinNext: 3,
   EnableDebug: false,
   EnableDLNA: false,
   EnableBonjour: true,

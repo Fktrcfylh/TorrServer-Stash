@@ -21,7 +21,8 @@ type Piece struct {
 	cache *Cache `json:"-"`
 }
 
-func NewPiece(id int, cache *Cache) *Piece {
+// NewPiece creates a piece; length is its real size, shorter for the last piece.
+func NewPiece(id int, length int64, cache *Cache) *Piece {
 	p := &Piece{
 		Id:    id,
 		cache: cache,
@@ -30,7 +31,7 @@ func NewPiece(id int, cache *Cache) *Piece {
 	if !settings.BTsets.UseDisk {
 		p.mPiece = NewMemPiece(p)
 	} else {
-		p.dPiece = NewDiskPiece(p)
+		p.dPiece = NewDiskPiece(p, length)
 	}
 	return p
 }

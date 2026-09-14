@@ -3,6 +3,7 @@ package torrstor
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -47,6 +48,16 @@ type Cache struct {
 	// freshly created reader has already set.
 	muPrio  sync.Mutex
 	torrent *torrent.Torrent
+
+	// pin is the pin set pushed by torr; nil means unpinned
+	pin atomic.Pointer[pinSet]
+}
+
+// pinSet is immutable after it is stored. Every piece of a pinned torrent is
+// kept (never evicted); want marks the pieces kept downloading, drop the
+// pieces whose data is deleted by dropPieces.
+type pinSet struct {
+	want, drop []bool
 }
 
 func NewCache(capacity int64, storage *Storage) *Cache {
@@ -80,13 +91,14 @@ func (c *Cache) Init(info *metainfo.Info, hash metainfo.Hash) {
 	}
 
 	for i := 0; i < c.pieceCount; i++ {
-		c.pieces[i] = NewPiece(i, c)
+		c.pieces[i] = NewPiece(i, info.Piece(i).Length(), c)
 	}
 
 	go c.priorityWatchdog()
 }
 
-// priorityWatchdog re-arms piece priorities while readers are active.
+// priorityWatchdog re-arms piece priorities while readers are active or the
+// cache is pinned.
 //
 // setLoadPriority is only reached through the cache cleanup path, which is
 // driven by piece reads and writes (see mempiece.go and diskpiece.go). Should
@@ -104,7 +116,7 @@ func (c *Cache) priorityWatchdog() {
 		if c.torrent == nil {
 			continue
 		}
-		if c.GetUseReaders() > 0 {
+		if c.GetUseReaders() > 0 || c.pin.Load() != nil {
 			c.getRemPieces()
 		}
 	}
@@ -112,6 +124,112 @@ func (c *Cache) priorityWatchdog() {
 
 func (c *Cache) SetTorrent(torr *torrent.Torrent) {
 	c.torrent = torr
+}
+
+// SetPin stores the pin set, want nil means unpinned. On a change it re-arms
+// priorities and deletes the dropped pieces asynchronously.
+func (c *Cache) SetPin(want, drop []bool) {
+	if c == nil {
+		return
+	}
+	var next *pinSet
+	if want != nil {
+		next = &pinSet{want: want, drop: drop}
+	}
+	// wait for a running cleanPieces or piece drop, so a piece selected under
+	// the previous set cannot be released after the new set is stored
+	c.muRemove.Lock()
+	cur := c.pin.Load()
+	if (cur == nil && next == nil) ||
+		(cur != nil && next != nil && slices.Equal(cur.want, next.want) && slices.Equal(cur.drop, next.drop)) {
+		c.muRemove.Unlock()
+		return
+	}
+	c.pin.Store(next)
+	c.muRemove.Unlock()
+
+	wanted, dropped := 0, 0
+	for _, v := range want {
+		if v {
+			wanted++
+		}
+	}
+	for _, v := range drop {
+		if v {
+			dropped++
+		}
+	}
+	log.TLogln("Set cache pin:", c.hash.HexString(), "pinned:", next != nil, "wanted:", wanted, "drop:", dropped)
+	if c.torrent != nil && !c.isClosed.Load() {
+		// priorities are lowered before the piece files are removed
+		go func() {
+			c.clearPriority()
+			c.dropPieces()
+		}()
+	}
+}
+
+// PinPending reports whether a wanted piece is not complete yet.
+func (c *Cache) PinPending() bool {
+	if c == nil || c.pin.Load() == nil {
+		return false
+	}
+	for id, p := range c.getPieces() {
+		if c.isWanted(id) && !p.Complete {
+			return true
+		}
+	}
+	return false
+}
+
+// isKept reports whether the piece is exempt from eviction: every piece of a
+// pinned torrent is.
+func (c *Cache) isKept(id int) bool {
+	return c.pin.Load() != nil
+}
+
+// isWanted reports whether the piece is kept downloading by the pin.
+func (c *Cache) isWanted(id int) bool {
+	ps := c.pin.Load()
+	return ps != nil && id < len(ps.want) && ps.want[id]
+}
+
+// dropPieces releases the pieces with data that the current pin set drops and
+// does not want, outside the files that have a reader.
+func (c *Cache) dropPieces() {
+	if c.isClosed.Load() || c.torrent == nil || c.pin.Load() == nil {
+		return
+	}
+	// every piece of a file with a reader is kept, not only the reader window:
+	// a reader may advance or seek while the pass runs, and playback must not
+	// lose data it is about to read
+	ranges := make([]Range, 0)
+	for _, r := range c.readersSnapshot() {
+		if r.file.Length() > 0 {
+			ranges = append(ranges, Range{
+				Start: int(r.file.Offset() / c.pieceLength),
+				End:   int((r.file.Offset() + r.file.Length() - 1) / c.pieceLength),
+				File:  r.file,
+			})
+		}
+	}
+
+	count := 0
+	for id, p := range c.getPieces() {
+		// the lock is taken per piece, so SetPin waits for one release only;
+		// the set is re-loaded so a piece is dropped only by the current set
+		c.muRemove.Lock()
+		cur := c.pin.Load()
+		if !c.isClosed.Load() && cur != nil && id < len(cur.drop) && cur.drop[id] &&
+			!(id < len(cur.want) && cur.want[id]) && !inRanges(ranges, id) && (p.Size > 0 || p.Complete) {
+			p.Release()
+			count++
+		}
+		c.muRemove.Unlock()
+	}
+	if count > 0 {
+		log.TLogln("Drop pinned pieces:", c.hash.HexString(), count)
+	}
 }
 
 func (c *Cache) getPieces() map[int]*Piece {
@@ -147,15 +265,20 @@ func (c *Cache) Close() error {
 
 	c.storage.removeCache(c.hash)
 
+	// the data of a pinned torrent is removed only by rem or pin off
 	if settings.BTsets.RemoveCacheOnDrop {
-		name := filepath.Join(settings.BTsets.TorrentsSavePath, c.hash.HexString())
-		if name != "" && name != "/" {
-			for _, v := range c.getPieces() {
-				if v.dPiece != nil {
-					os.Remove(v.dPiece.name)
+		if settings.IsTorrentPinned(c.hash) {
+			log.TLogln("Keep pinned cache on close:", c.hash)
+		} else {
+			name := filepath.Join(settings.BTsets.TorrentsSavePath, c.hash.HexString())
+			if name != "" && name != "/" {
+				for _, v := range c.getPieces() {
+					if v.dPiece != nil {
+						os.Remove(v.dPiece.name)
+					}
 				}
+				os.Remove(name)
 			}
-			os.Remove(name)
 		}
 	}
 
@@ -172,9 +295,10 @@ func (c *Cache) Close() error {
 }
 
 func (c *Cache) removePiece(piece *Piece) {
-	if !c.isClosed.Load() {
-		piece.Release()
+	if c.isClosed.Load() || c.isKept(piece.Id) {
+		return
 	}
+	piece.Release()
 }
 
 func (c *Cache) AdjustRA(readahead int64) {
@@ -220,7 +344,7 @@ func (c *Cache) GetState() *state.CacheState {
 		})
 	}
 
-	c.filled = fill
+	// c.filled is owned by getRemPieces, which excludes pinned pieces
 	cState.Capacity = c.capacity
 	cState.PiecesLength = c.pieceLength
 	cState.PiecesCount = c.pieceCount
@@ -277,6 +401,10 @@ func (c *Cache) getRemPieces() []*Piece {
 
 	// Determine which chunks can be deleted
 	for id, p := range c.getPieces() {
+		// pieces of a pinned torrent are never evicted and do not count against capacity
+		if c.isKept(id) {
+			continue
+		}
 		if p.Size > 0 {
 			fill += p.Size
 		}
@@ -427,6 +555,22 @@ func (c *Cache) clearPriority() {
 	ranges = mergeRange(ranges)
 
 	for id := range c.getPieces() {
+		if c.isWanted(id) {
+			// a wanted piece keeps downloading: raise it to Normal, but never
+			// lower the priority a reader has set inside its range
+			ps := c.torrent.PieceState(id)
+			if ps.Complete {
+				continue
+			}
+			if len(ranges) == 0 || !inRanges(ranges, id) {
+				if ps.Priority != torrent.PiecePriorityNormal {
+					c.torrent.Piece(id).SetPriority(torrent.PiecePriorityNormal)
+				}
+			} else if ps.Priority == torrent.PiecePriorityNone {
+				c.torrent.Piece(id).SetPriority(torrent.PiecePriorityNormal)
+			}
+			continue
+		}
 		if len(ranges) > 0 {
 			if !inRanges(ranges, id) {
 				if c.torrent.PieceState(id).Priority != torrent.PiecePriorityNone {

@@ -4,6 +4,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"time"
 
@@ -35,6 +36,7 @@ func LoadTorrent(tor *Torrent) *Torrent {
 	tr.Title = tor.Title
 	tr.Poster = tor.Poster
 	tr.Data = tor.Data
+	copyPin(tr, tor)
 	return tr
 }
 
@@ -78,7 +80,23 @@ func AddTorrent(spec *torrent.TorrentSpec, title, poster string, data string, ca
 		}
 	}
 
+	// the DB row owns the pin, the in-memory torrent mirrors it
+	if torDB != nil {
+		copyPin(torr, torDB)
+	}
+
 	return torr, nil
+}
+
+// copyPin copies the pin state from src to dst.
+func copyPin(dst, src *Torrent) {
+	dst.muTorrent.Lock()
+	dst.PinMode = src.PinMode
+	dst.PinNext = src.PinNext
+	dst.PinAnchor = src.PinAnchor
+	dst.PinDownloaded = slices.Clone(src.PinDownloaded)
+	dst.muTorrent.Unlock()
+	dst.applyPin()
 }
 
 func SaveTorrentToDB(torr *Torrent) {
@@ -111,6 +129,7 @@ func GetTorrent(hashHex string) *Torrent {
 				tr.Size = tor.Size
 				tr.Timestamp = tor.Timestamp
 				tr.Category = tor.Category
+				copyPin(tr, tor)
 				tr.GotInfo()
 			}
 		}()
@@ -159,26 +178,117 @@ func SetTorrent(hashHex, title, poster, category string, data string) *Torrent {
 	}
 }
 
+// SetTorrentPin sets the pin of a loaded or DB torrent without loading it.
+// Off is stored as an empty mode with N 0.
+func SetTorrentPin(hashHex, mode string, next int) *Torrent {
+	if sets.ReadOnly {
+		log.TLogln("API SetTorrentPin: Read-only DB mode!", hashHex)
+		return nil
+	}
+	log.TLogln("set torrent pin:", hashHex, "mode:", mode, "next:", next)
+	if mode == sets.PinModeOff {
+		mode = ""
+		next = 0
+	}
+	hash := metainfo.NewHashFromHex(hashHex)
+	torr := bts.GetTorrent(hash)
+	// off deletes data only of a torrent that was pinned before
+	wasPinned := sets.IsTorrentPinned(hash)
+	saved := sets.SetTorrentPin(hash, mode, next)
+	if mode == "" {
+		pinNoSpaceSet(hash, false)
+	}
+	if torr == nil {
+		if !saved {
+			return nil
+		}
+		if mode == "" && wasPinned {
+			removeTorrentDir(hashHex)
+		}
+		return GetTorrentDB(hash)
+	}
+	torr.muTorrent.Lock()
+	wasPinned = wasPinned || torr.PinMode != ""
+	torr.PinMode = mode
+	torr.PinNext = next
+	if mode == "" {
+		torr.PinDownloaded = nil
+	}
+	torr.muTorrent.Unlock()
+	torr.applyPin()
+	if !saved {
+		// pinning implies persistence, so a loaded torrent is saved to DB;
+		// the pin is set again in case a concurrent save created the row first
+		AddTorrentDB(torr)
+		sets.SetTorrentPin(hash, mode, next)
+	}
+	// a loaded cache never recreates its dir, so the data is removed after close
+	if mode == "" && wasPinned && torr.closed != nil && sets.BTsets.UseDisk && hashHex != "" && hashHex != "/" {
+		go removeTorrentDirAfterClose(torr, hash, filepath.Join(sets.BTsets.TorrentsSavePath, hashHex))
+	}
+	return torr
+}
+
+// removeTorrentDir removes the disk cache dir of a torrent; no loaded cache
+// may use it.
+func removeTorrentDir(hashHex string) {
+	if sets.BTsets.UseDisk && hashHex != "" && hashHex != "/" {
+		name := filepath.Join(sets.BTsets.TorrentsSavePath, hashHex)
+		if _, err := os.Stat(name); err == nil {
+			log.TLogln("Removing cache files for:", hashHex)
+			os.RemoveAll(name)
+		}
+	}
+}
+
+// removeTorrentDirAfterClose removes the dir name once the torrent is closed,
+// unless it is loaded or pinned again by then.
+func removeTorrentDirAfterClose(torr *Torrent, hash metainfo.Hash, name string) {
+	<-torr.closed
+	// drop() holds muTorrent while the storage is being closed; a pin set on
+	// the loaded torrent after off is kept even when the DB is already closed
+	torr.muTorrent.Lock()
+	repinned := torr.PinMode != ""
+	torr.muTorrent.Unlock()
+	if repinned {
+		return
+	}
+	// drop() and client.Close leave the closed torrent in the map, so only
+	// another torrent under the same hash means it was loaded again
+	if torr.bt != nil {
+		if cur := torr.bt.GetTorrent(hash); cur != nil && cur != torr {
+			return
+		}
+	}
+	if sets.IsTorrentPinned(hash) {
+		return
+	}
+	log.TLogln("Removing cache files for:", hash.HexString())
+	os.RemoveAll(name)
+}
+
 func RemTorrent(hashHex string) {
 	if sets.ReadOnly {
 		log.TLogln("API RemTorrent: Read-only DB mode!", hashHex)
 		return
 	}
 	hash := metainfo.NewHashFromHex(hashHex)
+	pinNoSpaceSet(hash, false)
 
 	// Download the torrent before deleting it to get the "closed" status
 	torr := bts.GetTorrent(hash)
 	if torr == nil {
 		// If the torrent isn't in memory, just delete it from the database and the files
 		RemTorrentDB(hash)
-		if sets.BTsets.UseDisk && hashHex != "" && hashHex != "/" {
-			name := filepath.Join(sets.BTsets.TorrentsSavePath, hashHex)
-			os.RemoveAll(name)
-		}
+		removeTorrentDir(hashHex)
 		return
 	}
 
 	closedChan := torr.closed
+
+	// Delete from the database first, so a pinned-torrent resume cannot load
+	// it again while it is being removed
+	RemTorrentDB(hash)
 
 	// Clear from memory
 	if bts.RemoveTorrent(hash) {
@@ -192,17 +302,8 @@ func RemTorrent(hashHex string) {
 		}
 
 		// Now we can safely delete the files from the disk
-		if sets.BTsets.UseDisk && hashHex != "" && hashHex != "/" {
-			name := filepath.Join(sets.BTsets.TorrentsSavePath, hashHex)
-			if _, err := os.Stat(name); err == nil {
-				log.TLogln("Removing cache files for:", hashHex)
-				os.RemoveAll(name)
-			}
-		}
+		removeTorrentDir(hashHex)
 	}
-
-	// Delete from the database
-	RemTorrentDB(hash)
 }
 
 func ListTorrent() []*Torrent {
@@ -250,6 +351,7 @@ func SetSettings(set *sets.BTSets) {
 	bts.Disconnect()
 	log.TLogln("connect")
 	bts.Connect()
+	resumePinned()
 	time.Sleep(time.Second * 1)
 	log.TLogln("end set settings")
 }
@@ -268,6 +370,7 @@ func SetDefSettings() {
 	bts.Disconnect()
 	log.TLogln("connect")
 	bts.Connect()
+	resumePinned()
 	time.Sleep(time.Second * 1)
 	log.TLogln("end set default settings")
 }

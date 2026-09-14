@@ -20,12 +20,12 @@ type DiskPiece struct {
 	mu sync.RWMutex
 }
 
-func NewDiskPiece(p *Piece) *DiskPiece {
+func NewDiskPiece(p *Piece, length int64) *DiskPiece {
 	name := filepath.Join(settings.BTsets.TorrentsSavePath, p.cache.hash.HexString(), strconv.Itoa(p.Id))
 	ff, err := os.Stat(name)
 	if err == nil {
 		p.Size = ff.Size()
-		p.Complete = ff.Size() == p.cache.pieceLength
+		p.Complete = ff.Size() == length
 		p.Accessed = ff.ModTime().Unix()
 	}
 	return &DiskPiece{piece: p, name: name}

@@ -1196,7 +1196,7 @@ const docTemplate = `{
                         "BasicAuth": []
                     }
                 ],
-                "description": "Allow to list, add, remove, get, set, drop, wipe torrents on server. The action depends of what has been asked.",
+                "description": "Allow to list, add, remove, get, set, drop, wipe, pin torrents on server. The action depends of what has been asked.",
                 "consumes": [
                     "application/json"
                 ],
@@ -1209,7 +1209,7 @@ const docTemplate = `{
                 "summary": "Handle torrents informations",
                 "parameters": [
                     {
-                        "description": "Torrent request. Available params for action: add, get, set, rem, list, drop, wipe. link required for add, hash required for get, set, rem, drop.",
+                        "description": "Torrent request. Available params for action: add, get, set, rem, list, drop, wipe, pin. link required for add, hash required for get, set, rem, drop, pin. pin_mode (off, all, next) required for pin; pin_next optional (\u003e= 0, default DefaultPinNext).",
                         "name": "request",
                         "in": "body",
                         "required": true,
@@ -1575,6 +1575,12 @@ const docTemplate = `{
                 "link": {
                     "type": "string"
                 },
+                "pin_mode": {
+                    "type": "string"
+                },
+                "pin_next": {
+                    "type": "integer"
+                },
                 "poster": {
                     "type": "string"
                 },
@@ -1716,6 +1722,10 @@ const docTemplate = `{
                     "format": "int64"
                 },
                 "connectionsLimit": {
+                    "type": "integer"
+                },
+                "defaultPinNext": {
+                    "description": "files to predownload for a \"next\" pin when the request omits N, def 3",
                     "type": "integer"
                 },
                 "defaultTrackers": {
@@ -2014,6 +2024,12 @@ const docTemplate = `{
         "state.TorrentFileStat": {
             "type": "object",
             "properties": {
+                "completed": {
+                    "type": "integer"
+                },
+                "downloaded": {
+                    "type": "boolean"
+                },
                 "id": {
                     "type": "integer"
                 },
@@ -2022,6 +2038,9 @@ const docTemplate = `{
                 },
                 "path": {
                     "type": "string"
+                },
+                "pinned": {
+                    "type": "boolean"
                 }
             }
         },
@@ -2120,6 +2139,18 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "pieces_dirtied_good": {
+                    "type": "integer"
+                },
+                "pin_error": {
+                    "type": "string"
+                },
+                "pin_mode": {
+                    "type": "string"
+                },
+                "pin_next": {
+                    "type": "integer"
+                },
+                "pin_progress": {
                     "type": "integer"
                 },
                 "poster": {

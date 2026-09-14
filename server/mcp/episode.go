@@ -1,7 +1,6 @@
 package mcp
 
 import (
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -17,7 +16,6 @@ var (
 	reSeason = regexp.MustCompile(`(?i)(?:season|sezon|сезон)[- .]*(\d{1,3})|(\d{1,3})[- .]*(?:season|sezon|сезон)`)
 	reEpWord = regexp.MustCompile(`(?i)(?:episode|ep(?:isode)?|серия|серии)[- .]*(\d{1,4})`)
 	reEOnly  = regexp.MustCompile(`(?i)(?:^|[^0-9A-Za-z])e(\d{1,4})(?:[^0-9A-Za-z]|$)`)
-	reSample = regexp.MustCompile(`(?i)(?:^|[._\-\s\[(])(?:sample|trailer|preview)(?:[._\-\s\])]|$)`)
 )
 
 // EpisodeRef is a parsed season/episode from a torrent file path.
@@ -113,15 +111,6 @@ func firstSubint(m []string) int {
 	return 0
 }
 
-func isSampleFile(path string) bool {
-	base := filepath.Base(path)
-	return reSample.MatchString(base)
-}
-
-func isVideoFile(path string) bool {
-	return utils.GetMimeType(path) == "video/*"
-}
-
 func filterSnapshots(all []TorrentSnapshot, query, category, hash string) []TorrentSnapshot {
 	query = strings.ToLower(strings.TrimSpace(query))
 	category = strings.ToLower(strings.TrimSpace(category))
@@ -180,7 +169,7 @@ func SelectNextUnwatched(all []TorrentSnapshot, viewed ViewedMap, query, categor
 			vm = viewed[snap.Hash]
 		}
 		for _, f := range snap.Files {
-			if f == nil || !isVideoFile(f.Path) || isSampleFile(f.Path) {
+			if f == nil || !utils.IsVideoFile(f.Path) || utils.IsSampleFile(f.Path) {
 				continue
 			}
 			s, e, parsed := ParseEpisode(f.Path)

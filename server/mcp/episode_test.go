@@ -159,12 +159,3 @@ func TestSelectNextUnwatchedQueryFiltersTitle(t *testing.T) {
 		t.Fatalf("got title %q want Beta Show", res.ShowTitle)
 	}
 }
-
-func TestIsSampleFile(t *testing.T) {
-	if !isSampleFile("Show.S01E01.sample.mkv") {
-		t.Fatal("expected sample")
-	}
-	if isSampleFile("Show.S01E01.mkv") {
-		t.Fatal("did not expect sample")
-	}
-}

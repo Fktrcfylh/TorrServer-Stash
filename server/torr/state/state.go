@@ -65,12 +65,22 @@ type TorrentStatus struct {
 	PiecesDirtiedBad    int64       `json:"pieces_dirtied_bad,omitempty"`
 	DurationSeconds     float64     `json:"duration_seconds,omitempty"`
 	BitRate             string      `json:"bit_rate,omitempty"`
+	PinMode             string      `json:"pin_mode,omitempty"`
+	PinNext             int         `json:"pin_next,omitempty"`
+	PinProgress         int         `json:"pin_progress,omitempty"`
+	PinError            string      `json:"pin_error,omitempty"`
 
 	FileStats []*TorrentFileStat `json:"file_stats,omitempty"`
 }
 
+// PinErrorNoSpace is the pin error of a pin paused for lack of free space.
+const PinErrorNoSpace = "no_space"
+
 type TorrentFileStat struct {
-	Id     int    `json:"id,omitempty"`
-	Path   string `json:"path,omitempty"`
-	Length int64  `json:"length,omitempty"`
+	Id         int    `json:"id,omitempty"`
+	Path       string `json:"path,omitempty"`
+	Length     int64  `json:"length,omitempty"`
+	Pinned     bool   `json:"pinned,omitempty"`
+	Completed  int64  `json:"completed,omitempty"`
+	Downloaded bool   `json:"downloaded,omitempty"`
 }
