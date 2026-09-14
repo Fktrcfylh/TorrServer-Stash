@@ -1,3 +1,34 @@
+> **TorrServer-Stash is a fork of [YouROK/TorrServer](https://github.com/YouROK/TorrServer).**
+> Everything below the fork section is the upstream README. Releases, install scripts and Docker images
+> it links to are upstream builds and do not include the fork's changes. Build from source to get them.
+
+## What the fork adds
+
+Upstream streams a torrent and keeps only a small cache around the playback position. The fork can also
+download a torrent to disk ahead of time, so playback doesn't depend on how fast peers are right now.
+It needs disk cache storage enabled (`UseDisk` and `TorrentsSavePath`).
+
+- **Pin a torrent.** Tick "Download to disk" in the torrent dialog, or call
+  `POST /torrents {"action":"pin","hash":"...","pin_mode":"all"|"next"|"off","pin_next":N}`.
+  The download runs without a player. If you watch the same torrent at the same time, playback gets priority.
+- **Two modes.** `all` downloads the whole torrent. `next` downloads the current episode plus the next N
+  (default 3, set in settings). Watching episode 5 with N=3 downloads episodes 5 to 8.
+- **Watched episodes are removed.** Starting episode K deletes episodes before K from disk. Episodes already
+  downloaded past the window stay.
+- **Data survives unloads.** Drop, disconnect timeout, `RemoveCacheOnDrop` and startup cleanup leave pinned data
+  alone. Removing the torrent or unpinning it deletes the data.
+- **Resume.** Unfinished pins continue after a restart, after saving settings, and every minute.
+- **Free space check.** If the download would leave less than 1 GiB free, the pin pauses with a "No space"
+  status and retries every minute.
+- **Progress in the UI.** A Disk column in the file list shows percent or a downloaded mark, and the torrent card
+  shows overall progress. The same data is in the `/torrents` status JSON (`pin_progress`, `pin_error`,
+  `file_stats[].pinned|completed|downloaded`).
+
+Two known limits. After a restart, piece files on disk are trusted by size, without a hash check. The free space
+check runs per torrent, so two pins can fill the disk between checks.
+
+---
+
 <p align="center" style="text-align: center">
   <img src="https://github.com/YouROK/TorrServer/assets/144587546/53f7175a-cda4-4a06-86b6-2ac07582dcf1" width="33%"><br/>
 </p>
