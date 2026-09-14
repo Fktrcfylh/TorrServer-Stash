@@ -3,6 +3,7 @@ import isEqual from 'lodash/isEqual'
 import { humanizeSize, detectStandaloneApp, isMacOS, isAppleDevice } from 'utils/Utils'
 import ptt from 'parse-torrent-title'
 import { Button } from '@material-ui/core'
+import { OfflinePin as OfflinePinIcon } from '@material-ui/icons'
 import CopyToClipboard from 'react-copy-to-clipboard'
 import { useTranslation } from 'react-i18next'
 import {
@@ -28,6 +29,14 @@ ptt.addHandler('season', /сезон[- |. ](\d{1,3})|(\d{1,3})[- |. ]сезон/
   type: 'integer',
 })
 
+// Predownload state of one file from the torrent status JSON
+const pinState = ({ pinned, completed, downloaded, length }) => {
+  if (downloaded) return { kind: 'downloaded' }
+  if (!pinned) return null
+  const percent = length > 0 ? Math.min(100, Math.floor((100 * (completed || 0)) / length)) : 0
+  return { kind: 'downloading', percent }
+}
+
 const Table = memo(
   ({ playableFileList, viewedFileList, selectedSeason, seasonAmount, hash }) => {
     const { t } = useTranslation()
@@ -51,6 +60,14 @@ const Table = memo(
     const fileHasEpisodeText = !!playableFileList?.find(({ path }) => ptt.parse(path).episode)
     const fileHasSeasonText = !!playableFileList?.find(({ path }) => ptt.parse(path).season)
     const fileHasResolutionText = !!playableFileList?.find(({ path }) => ptt.parse(path).resolution)
+    const showPinColumn = !!playableFileList?.some(({ pinned, downloaded }) => pinned || downloaded)
+    const renderPinState = (file, emptyValue) => {
+      const state = pinState(file)
+      if (!state) return emptyValue
+      if (state.kind === 'downloaded')
+        return <OfflinePinIcon fontSize='small' titleAccess={t('Pin.Downloaded')} style={{ verticalAlign: 'middle' }} />
+      return `${state.percent}%`
+    }
 
     // if files in list is more then 1 and no season text detected by ptt.parse, show full name
     const shouldDisplayFullFileName = playableFileList?.length > 1 && !fileHasEpisodeText
@@ -79,12 +96,14 @@ const Table = memo(
               {fileHasEpisodeText && <th style={{ width: '0' }}>{t('Episode')}</th>}
               {fileHasResolutionText && <th style={{ width: '0' }}>{t('Resolution')}</th>}
               <th style={{ width: '100px' }}>{t('Size')}</th>
+              {showPinColumn && <th style={{ width: '0' }}>{t('Pin.Column')}</th>}
               <th style={{ width: '400px' }}>{t('Actions')}</th>
             </tr>
           </thead>
 
           <tbody>
-            {playableFileList.map(({ id, path, length }) => {
+            {playableFileList.map(file => {
+              const { id, path, length } = file
               const { title, resolution, episode, season } = ptt.parse(path)
               const isViewed = viewedFileList?.includes(id)
               const link = getFileLink(path, id)
@@ -104,6 +123,7 @@ const Table = memo(
                     {fileHasEpisodeText && <td data-label='episode'>{episode}</td>}
                     {fileHasResolutionText && <td data-label='resolution'>{resolution}</td>}
                     <td data-label='size'>{humanizeSize(length)}</td>
+                    {showPinColumn && <td data-label='predownload'>{renderPinState(file, null)}</td>}
                     <td>
                       <div className='button-cell'>
                         <Button onClick={() => preloadBuffer(id)} variant='outlined' color='primary' size='small'>
@@ -177,7 +197,8 @@ const Table = memo(
         </TableStyle>
 
         <ShortTableWrapper>
-          {playableFileList.map(({ id, path, length }) => {
+          {playableFileList.map(file => {
+            const { id, path, length } = file
             const { title, resolution, episode, season } = ptt.parse(path)
             const isViewed = viewedFileList?.includes(id)
             const link = getFileLink(path, id)
@@ -223,6 +244,12 @@ const Table = memo(
                       <div className='short-table-field-name'>{t('Size')}</div>
                       <div className='short-table-field-value'>{humanizeSize(length)}</div>
                     </div>
+                    {showPinColumn && (
+                      <div className='short-table-field'>
+                        <div className='short-table-field-name'>{t('Pin.Column')}</div>
+                        <div className='short-table-field-value'>{renderPinState(file, '—')}</div>
+                      </div>
+                    )}
                   </div>
                   <div className='short-table-buttons'>
                     <Button onClick={() => preloadBuffer(id)} variant='outlined' color='primary' size='small'>

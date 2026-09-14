@@ -37,3 +37,18 @@ export const SmallLabel = styled.div`
     }
   `}
 `
+
+export const PinControls = styled.div`
+  margin-bottom: 30px;
+
+  .pin-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px 20px;
+  }
+
+  .pin-next {
+    width: 140px;
+  }
+`

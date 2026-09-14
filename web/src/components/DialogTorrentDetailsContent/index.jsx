@@ -58,6 +58,10 @@ export default function DialogTorrentDetailsContent({ closeDialog, torrent }) {
     upload_speed: uploadSpeed,
     torrent_size: torrentSize,
     file_stats: torrentFileList,
+    pin_mode: pinMode,
+    pin_next: pinNext,
+    pin_progress: pinProgress,
+    pin_error: pinError,
   } = torrent
 
   const cache = useUpdateCache(hash)
@@ -197,6 +201,12 @@ export default function DialogTorrentDetailsContent({ closeDialog, torrent }) {
                   name={name}
                   title={title}
                   setViewedFileList={setViewedFileList}
+                  pinMode={pinMode}
+                  pinNext={pinNext}
+                  pinProgress={pinProgress}
+                  pinError={pinError}
+                  useDisk={settings?.UseDisk}
+                  defaultPinNext={settings?.DefaultPinNext}
                 />
               </div>
             </MainSection>

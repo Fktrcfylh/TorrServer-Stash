@@ -43,6 +43,7 @@ type BTSets struct {
 	UseDisk           bool
 	TorrentsSavePath  string
 	RemoveCacheOnDrop bool
+	DefaultPinNext    int // files to predownload for a "next" pin when the request omits N, def 3
 
 	// Torrent
 	ForceEncrypt             bool
@@ -160,6 +161,10 @@ func SetBTSets(sets *BTSets) {
 		sets.ReaderReadAHead = 100
 	}
 
+	if sets.DefaultPinNext <= 0 {
+		sets.DefaultPinNext = 3
+	}
+
 	if sets.PreloadCache < 0 {
 		sets.PreloadCache = 0
 	}
@@ -201,6 +206,7 @@ func SetDefaultConfig() {
 	sets := new(BTSets)
 	sets.CacheSize = 64 * 1024 * 1024 // 64 MB
 	sets.PreloadCache = 50
+	sets.DefaultPinNext = 3
 	sets.ConnectionsLimit = 25
 	sets.RetrackersMode = 1
 	sets.TrackersListURL = ""
@@ -239,6 +245,9 @@ func loadBTSets() {
 		if err == nil {
 			if BTsets.ReaderReadAHead < 5 {
 				BTsets.ReaderReadAHead = 5
+			}
+			if BTsets.DefaultPinNext <= 0 {
+				BTsets.DefaultPinNext = 3
 			}
 			// Set default TMDB settings if missing (for existing configs)
 			if BTsets.TMDBSettings.APIURL == "" {

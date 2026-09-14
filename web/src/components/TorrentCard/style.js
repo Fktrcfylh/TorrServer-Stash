@@ -267,3 +267,20 @@ export const StatusIndicators = styled.div`
     box-shadow: 1px 1px 2px rgba(0, 0, 0, 0.3);
   `}
 `
+
+export const PinBadge = styled.span`
+  ${({
+    isError,
+    theme: {
+      torrentCard: { accentCardColor },
+    },
+  }) => css`
+    display: inline-block;
+    margin-inline-start: 6px;
+    padding: 0 4px;
+    border-radius: 3px;
+    background: ${isError ? '#E57373' : accentCardColor};
+    color: #fff;
+    white-space: nowrap;
+  `}
+`

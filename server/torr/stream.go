@@ -80,6 +80,7 @@ func (t *Torrent) Stream(fileID int, req *http.Request, resp http.ResponseWriter
 		http.Error(resp, err.Error(), http.StatusForbidden)
 		return err
 	}
+	t.updatePinAnchor(fileID, file.Path(), req.Method, req.URL.Query().Has(ProbeQuery))
 	// Create reader with context for timeout
 	reader := t.NewReader(file)
 	if reader == nil {

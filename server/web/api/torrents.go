@@ -19,7 +19,7 @@ import (
 	"github.com/pkg/errors"
 )
 
-// Action: add, get, set, rem, list, drop
+// Action: add, get, set, rem, list, drop, wipe, pin
 type torrReqJS struct {
 	requestI
 	Link     string `json:"link,omitempty"`
@@ -29,16 +29,18 @@ type torrReqJS struct {
 	Poster   string `json:"poster,omitempty"`
 	Data     string `json:"data,omitempty"`
 	SaveToDB bool   `json:"save_to_db,omitempty"`
+	PinMode  string `json:"pin_mode,omitempty"`
+	PinNext  *int   `json:"pin_next,omitempty"`
 }
 
 // torrents godoc
 //
 //	@Summary		Handle torrents informations
-//	@Description	Allow to list, add, remove, get, set, drop, wipe torrents on server. The action depends of what has been asked.
+//	@Description	Allow to list, add, remove, get, set, drop, wipe, pin torrents on server. The action depends of what has been asked.
 //
 //	@Tags			API
 //
-//	@Param			request	body	torrReqJS	true	"Torrent request. Available params for action: add, get, set, rem, list, drop, wipe. link required for add, hash required for get, set, rem, drop."
+//	@Param			request	body	torrReqJS	true	"Torrent request. Available params for action: add, get, set, rem, list, drop, wipe, pin. link required for add, hash required for get, set, rem, drop, pin. pin_mode (off, all, next) required for pin; pin_next optional (>= 0, default DefaultPinNext)."
 //
 //	@Accept			json
 //	@Produce		json
@@ -80,6 +82,10 @@ func torrents(c *gin.Context) {
 	case "wipe":
 		{
 			wipeTorrents(c)
+		}
+	case "pin":
+		{
+			pinTorrent(req, c)
 		}
 	default:
 		{
@@ -183,6 +189,39 @@ func setTorrent(req torrReqJS, c *gin.Context) {
 	}
 	torr.SetTorrent(req.Hash, req.Title, req.Poster, req.Category, req.Data)
 	c.Status(200)
+}
+
+func pinTorrent(req torrReqJS, c *gin.Context) {
+	if req.Hash == "" {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "hash is empty"})
+		return
+	}
+	if set.ReadOnly {
+		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "Read-only mode"})
+		return
+	}
+	if req.PinMode != set.PinModeOff && req.PinMode != set.PinModeAll && req.PinMode != set.PinModeNext {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": errors.Errorf("unknown pin_mode: %q", req.PinMode).Error()})
+		return
+	}
+	if req.PinNext != nil && *req.PinNext < 0 {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "pin_next must not be negative"})
+		return
+	}
+	if req.PinMode != set.PinModeOff && !set.BTsets.UseDisk {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "pin requires disk storage (UseDisk)"})
+		return
+	}
+	next := set.BTsets.DefaultPinNext
+	if req.PinNext != nil {
+		next = *req.PinNext
+	}
+	tor := torr.SetTorrentPin(req.Hash, req.PinMode, next)
+	if tor == nil {
+		c.AbortWithStatusJSON(http.StatusNotFound, gin.H{"error": "torrent not found"})
+		return
+	}
+	c.JSON(200, tor.Status())
 }
 
 func remTorrent(req torrReqJS, c *gin.Context) {

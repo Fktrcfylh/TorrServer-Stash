@@ -106,6 +106,10 @@ definitions:
         type: string
       link:
         type: string
+      pin_mode:
+        type: string
+      pin_next:
+        type: integer
       poster:
         type: string
       save_to_db:
@@ -200,6 +204,10 @@ definitions:
         format: int64
         type: integer
       connectionsLimit:
+        type: integer
+      defaultPinNext:
+        description: files to predownload for a "next" pin when the request omits
+          N, def 3
         type: integer
       defaultTrackers:
         description: newline-separated announce URLs used as local/fallback list
@@ -409,12 +417,18 @@ definitions:
     type: object
   state.TorrentFileStat:
     properties:
+      completed:
+        type: integer
+      downloaded:
+        type: boolean
       id:
         type: integer
       length:
         type: integer
       path:
         type: string
+      pinned:
+        type: boolean
     type: object
   state.TorrentStat:
     enum:
@@ -483,6 +497,14 @@ definitions:
       pieces_dirtied_bad:
         type: integer
       pieces_dirtied_good:
+        type: integer
+      pin_error:
+        type: string
+      pin_mode:
+        type: string
+      pin_next:
+        type: integer
+      pin_progress:
         type: integer
       poster:
         type: string
@@ -1296,12 +1318,13 @@ paths:
     post:
       consumes:
       - application/json
-      description: Allow to list, add, remove, get, set, drop, wipe torrents on server.
-        The action depends of what has been asked.
+      description: Allow to list, add, remove, get, set, drop, wipe, pin torrents
+        on server. The action depends of what has been asked.
       parameters:
       - description: 'Torrent request. Available params for action: add, get, set,
-          rem, list, drop, wipe. link required for add, hash required for get, set,
-          rem, drop.'
+          rem, list, drop, wipe, pin. link required for add, hash required for get,
+          set, rem, drop, pin. pin_mode (off, all, next) required for pin; pin_next
+          optional (>= 0, default DefaultPinNext).'
         in: body
         name: request
         required: true

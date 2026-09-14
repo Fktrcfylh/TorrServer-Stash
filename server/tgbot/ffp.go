@@ -51,7 +51,7 @@ func cmdFfp(c tele.Context) error {
 		proto = "https"
 		port = settings.SslPort
 	}
-	link := fmt.Sprintf("%s://127.0.0.1:%s/play/%s/%d", proto, port, hash, id)
+	link := fmt.Sprintf("%s://127.0.0.1:%s/play/%s/%d?%s=1", proto, port, hash, id, torr.ProbeQuery)
 
 	data, err := ffprobe.ProbeUrl(link)
 	if err != nil {

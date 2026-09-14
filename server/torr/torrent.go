@@ -2,14 +2,12 @@ package torr
 
 import (
 	"errors"
-	"sort"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
 
 	"server/torrshash"
-
-	utils2 "server/utils"
 
 	"github.com/anacrolix/torrent"
 	"github.com/anacrolix/torrent/metainfo"
@@ -32,6 +30,11 @@ type Torrent struct {
 	Stat      state.TorrentStat
 	Timestamp int64
 	Size      int64
+
+	PinMode       string
+	PinNext       int
+	PinAnchor     int
+	PinDownloaded []int
 
 	*torrent.Torrent
 	muTorrent sync.Mutex
@@ -131,6 +134,7 @@ func (t *Torrent) WaitInfo() bool {
 		if t.bt != nil && t.bt.storage != nil {
 			t.cache = t.bt.storage.GetCache(t.Hash())
 			t.cache.SetTorrent(t.Torrent)
+			t.applyPin()
 		}
 		return true
 	case <-t.closed:
@@ -138,6 +142,59 @@ func (t *Torrent) WaitInfo() bool {
 	case <-tm.C:
 		return false
 	}
+}
+
+// applyPin pushes the pin set computed from the mirror to the cache. Only disk
+// storage with metadata pins pieces.
+func (t *Torrent) applyPin() {
+	// the cache is updated under the lock so concurrent calls cannot apply a
+	// stale pin after a newer one
+	t.muTorrent.Lock()
+	defer t.muTorrent.Unlock()
+	pinned := t.PinMode == settings.PinModeAll || t.PinMode == settings.PinModeNext
+	if !pinned || !settings.BTsets.UseDisk {
+		// Hash does not take muTorrent
+		pinNoSpaceSet(t.Hash(), false)
+		t.cache.SetPin(nil, nil)
+		return
+	}
+	if t.Torrent == nil || t.Torrent.Info() == nil {
+		// the free space is unknown without info, so the no-space state is kept
+		t.cache.SetPin(nil, nil)
+		return
+	}
+	info := t.Torrent.Info()
+	var files []pinFile
+	for i, f := range sortedFiles(t.Torrent.Files()) {
+		files = append(files, pinFile{id: i + 1, path: f.Path(), offset: f.Offset(), length: f.Length()})
+	}
+	want, drop := pinPieces(files, info.PieceLength, t.Torrent.NumPieces(), t.PinMode, t.PinNext, t.PinAnchor)
+
+	// the pin is paused while the save path has no room for the missing
+	// wanted pieces plus the margin; an unknown free space never pauses
+	var required int64
+	for i, w := range want {
+		if w && !t.Torrent.PieceState(i).Complete {
+			required += info.Piece(i).Length()
+		}
+	}
+	free, ok := freeSpace(settings.BTsets.TorrentsSavePath)
+	paused := ok && required > 0 && free < uint64(required)+pinFreeSpaceMargin
+	hash := t.Torrent.InfoHash()
+	if pinNoSpaceSet(hash, paused) {
+		if paused {
+			log.TLogln("Pin paused, no space:", hash.HexString(), free, required)
+		} else {
+			log.TLogln("Pin resumed, space available:", hash.HexString(), free, required)
+		}
+	}
+	if paused {
+		// a non-nil empty want set keeps every piece from eviction and the drop
+		// working, but raises no piece
+		t.cache.SetPin(make([]bool, len(want)), drop)
+		return
+	}
+	t.cache.SetPin(want, drop)
 }
 
 func (t *Torrent) GotInfo() bool {
@@ -150,10 +207,13 @@ func (t *Torrent) GotInfo() bool {
 	if t.Stat == state.TorrentPreload {
 		return true
 	}
+	// read before waiting: nothing after WaitInfo touches settings, so the end
+	// of an asynchronous load is ordered by the pin apply inside WaitInfo
+	timeout := time.Second * time.Duration(settings.BTsets.TorrentDisconnectTimeout)
 	t.Stat = state.TorrentGettingInfo
 	if t.WaitInfo() {
 		t.Stat = state.TorrentWorking
-		t.AddExpiredTime(time.Second * time.Duration(settings.BTsets.TorrentDisconnectTimeout))
+		t.AddExpiredTime(timeout)
 		return true
 	} else {
 		t.Close()
@@ -183,6 +243,8 @@ func (t *Torrent) watch() {
 }
 
 func (t *Torrent) progressEvent() {
+	// the downloaded files are recorded before an expiry can unload the torrent
+	t.updatePinDownloaded()
 	if t.expired() {
 		if t.TorrentSpec != nil {
 			log.TLogln("Torrent close by timeout", t.TorrentSpec.InfoHash.HexString())
@@ -237,6 +299,10 @@ func (t *Torrent) updateRA() {
 
 func (t *Torrent) expired() bool {
 	if t.cache == nil {
+		return false
+	}
+	// an unfinished pin keeps the torrent loaded
+	if t.cache.PinPending() {
 		return false
 	}
 	return t.cache.Readers() == 0 && t.expiredTime.Before(time.Now()) && (t.Stat == state.TorrentWorking || t.Stat == state.TorrentClosed)
@@ -333,12 +399,18 @@ func (t *Torrent) Status() *state.TorrentStatus {
 	st.TorrentSize = t.Size
 	st.BitRate = t.BitRate
 	st.DurationSeconds = t.DurationSeconds
+	st.PinMode = t.PinMode
+	st.PinNext = t.PinNext
 
+	pinned := t.PinMode == settings.PinModeAll || t.PinMode == settings.PinModeNext
+	var hash metainfo.Hash
 	if t.TorrentSpec != nil {
+		hash = t.TorrentSpec.InfoHash
 		st.Hash = t.TorrentSpec.InfoHash.HexString()
 	}
 	if t.Torrent != nil {
 		st.Name = t.Torrent.Name()
+		hash = t.Torrent.InfoHash()
 		st.Hash = t.Torrent.InfoHash().HexString()
 		st.LoadedSize = t.Torrent.BytesCompleted()
 
@@ -368,16 +440,26 @@ func (t *Torrent) Status() *state.TorrentStatus {
 		if t.Torrent.Info() != nil {
 			st.TorrentSize = t.Torrent.Length()
 
-			files := t.Files()
-			sort.Slice(files, func(i, j int) bool {
-				return utils2.CompareStrings(files[i].Path(), files[j].Path())
-			})
+			files := sortedFiles(t.Files())
+			var pinFiles []pinFile
 			for i, f := range files {
 				st.FileStats = append(st.FileStats, &state.TorrentFileStat{
 					Id:     i + 1, // in web id 0 is undefined
 					Path:   f.Path(),
 					Length: f.Length(),
 				})
+				if pinned {
+					pinFiles = append(pinFiles, pinFile{id: i + 1, path: f.Path(), offset: f.Offset(), length: f.Length()})
+				}
+			}
+			if pinned {
+				targets := pinTargets(pinFiles, t.PinMode, t.PinNext, t.PinAnchor)
+				for i, fs := range st.FileStats {
+					fs.Pinned = targets[i]
+					fs.Completed = fileCompleted(files[i])
+					fs.Downloaded = slices.Contains(t.PinDownloaded, fs.Id)
+				}
+				st.PinProgress = pinProgress(pinFiles, targets, func(i int) int64 { return st.FileStats[i].Completed })
 			}
 
 			th := torrshash.New(st.Hash)
@@ -398,6 +480,31 @@ func (t *Torrent) Status() *state.TorrentStatus {
 				st.TorrsHash = token
 			}
 		}
+	} else if pinned {
+		// a DB stub reports the pin from the stored file list and row
+		files := dataFiles(t.Data)
+		if len(files) > 0 {
+			targets := pinTargets(files, t.PinMode, t.PinNext, t.PinAnchor)
+			for i, f := range files {
+				st.FileStats = append(st.FileStats, &state.TorrentFileStat{
+					Id:         f.id,
+					Path:       f.path,
+					Length:     f.length,
+					Pinned:     targets[i],
+					Downloaded: slices.Contains(t.PinDownloaded, f.id),
+				})
+			}
+			st.PinProgress = pinProgress(files, targets, func(i int) int64 {
+				if st.FileStats[i].Downloaded {
+					return files[i].length
+				}
+				return 0
+			})
+		}
+	}
+	// a pin whose target files are all downloaded needs no space
+	if pinned && st.PinProgress < 100 && pinNoSpaceHas(hash) && settings.BTsets.UseDisk {
+		st.PinError = state.PinErrorNoSpace
 	}
 
 	return st

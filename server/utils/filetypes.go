@@ -2,10 +2,13 @@ package utils
 
 import (
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"server/torr/state"
 )
+
+var reSample = regexp.MustCompile(`(?i)(?:^|[._\-\s\[(])(?:sample|trailer|preview)(?:[._\-\s\])]|$)`)
 
 var extVideo = map[string]interface{}{
 	".3g2":   nil,
@@ -90,6 +93,16 @@ func GetMimeType(filename string) string {
 		return "audio/*"
 	}
 	return "*/*"
+}
+
+// IsVideoFile reports whether the path has a video extension.
+func IsVideoFile(path string) bool {
+	return GetMimeType(path) == "video/*"
+}
+
+// IsSampleFile reports whether the file name marks a sample, trailer or preview.
+func IsSampleFile(path string) bool {
+	return reSample.MatchString(filepath.Base(path))
 }
 
 func GetPlayableFiles(st state.TorrentStatus) []*state.TorrentFileStat {
