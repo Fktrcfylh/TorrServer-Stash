@@ -52,6 +52,10 @@ func AddTorrentDB(torr *Torrent) {
 	}
 	// don't override timestamp from DB on edit
 	t.Timestamp = torr.Timestamp // time.Now().Unix()
+	// used only for a new row; an existing row keeps its flag (settings.AddTorrent)
+	torr.muTorrent.Lock()
+	t.RemoteDownload = torr.RemoteDownload
+	torr.muTorrent.Unlock()
 
 	settings.AddTorrent(t)
 }
@@ -68,6 +72,7 @@ func GetTorrentDB(hash metainfo.Hash) *Torrent {
 			torr.Timestamp = db.Timestamp
 			torr.Size = db.Size
 			torr.Data = db.Data
+			torr.RemoteDownload = db.RemoteDownload
 			torr.Stat = state.TorrentInDB
 			return torr
 		}
@@ -91,6 +96,7 @@ func ListTorrentsDB() map[metainfo.Hash]*Torrent {
 		torr.Timestamp = db.Timestamp
 		torr.Size = db.Size
 		torr.Data = db.Data
+		torr.RemoteDownload = db.RemoteDownload
 		torr.Stat = state.TorrentInDB
 		ret[torr.TorrentSpec.InfoHash] = torr
 	}

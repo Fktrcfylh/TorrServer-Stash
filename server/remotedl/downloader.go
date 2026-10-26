@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"sync"
 
 	"server/settings"
 )
@@ -27,10 +28,54 @@ type SessionInfo struct {
 	LPDEnabled bool   `json:"lpd_enabled"`
 }
 
+// AddRequest is one torrent to add. Exactly one of Metainfo (raw .torrent
+// bytes) and Magnet is set. An empty DownloadDir means the client's default.
+type AddRequest struct {
+	Metainfo    []byte
+	Magnet      string
+	DownloadDir string
+}
+
+// AddResult is what the client reports about an added torrent. Duplicate means
+// the client already had it.
+type AddResult struct {
+	Hash      string
+	Name      string
+	Duplicate bool
+}
+
 // Downloader is a remote torrent client.
 type Downloader interface {
 	// Session returns the client's version, RPC version, peer port and LPD flag.
 	Session(ctx context.Context) (SessionInfo, error)
+	// Add adds a whole torrent; a torrent the client already has is a success.
+	Add(ctx context.Context, req AddRequest) (AddResult, error)
+	// Remove removes one torrent by its v1 info hash (40 hex chars) together
+	// with its downloaded data. Any other hash is refused before a request.
+	Remove(ctx context.Context, hash string) error
+}
+
+var (
+	sharedMu  sync.Mutex
+	sharedCfg settings.RemoteDownloaderConfig
+	shared    Downloader
+)
+
+// Shared returns one Downloader for cfg, cached while cfg stays the same, so
+// calls reuse its session id. A changed cfg builds a new one; errors of New
+// are returned and nothing is cached.
+func Shared(cfg settings.RemoteDownloaderConfig) (Downloader, error) {
+	sharedMu.Lock()
+	defer sharedMu.Unlock()
+	if shared != nil && cfg == sharedCfg {
+		return shared, nil
+	}
+	d, err := New(cfg)
+	if err != nil {
+		return nil, err
+	}
+	shared, sharedCfg = d, cfg
+	return d, nil
 }
 
 // New builds the Downloader selected by cfg.Type. An empty URL returns

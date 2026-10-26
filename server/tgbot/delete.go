@@ -7,16 +7,18 @@ import (
 	"server/torr"
 )
 
-func deleteTorrent(c tele.Context) {
+// deleteTorrent removes the torrent of a delete button; the error of a failed
+// removal (remote downloader) is returned and the torrent kept.
+func deleteTorrent(c tele.Context) error {
 	args := c.Args()
 	if len(args) < 2 {
-		return
+		return nil
 	}
 	hash := args[1]
 	if !isHash(hash) {
-		return
+		return nil
 	}
-	torr.RemTorrent(hash)
+	return torr.RemTorrent(hash)
 }
 
 func clear(c tele.Context) error {
@@ -39,11 +41,24 @@ func clearConfirm(c tele.Context, confirm string) error {
 		return c.Bot().Delete(c.Callback().Message)
 	}
 	torrents := torr.ListTorrent()
-	count := len(torrents)
+	count := 0
+	var firstErr error
 	for _, t := range torrents {
-		torr.RemTorrent(t.Hash().HexString())
+		if err := torr.RemTorrent(t.Hash().HexString()); err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		count++
 	}
 	_ = c.Respond(&tele.CallbackResponse{Text: tr(uid, "deleted")})
 	_ = c.Bot().Delete(c.Callback().Message)
-	return c.Send(fmt.Sprintf(tr(uid, "clear_done"), count))
+	if err := c.Send(fmt.Sprintf(tr(uid, "clear_done"), count)); err != nil {
+		return err
+	}
+	if firstErr != nil {
+		return c.Send(tr(uid, "error")+":\n"+escapeHtml(firstErr.Error()), tele.ModeHTML)
+	}
+	return nil
 }

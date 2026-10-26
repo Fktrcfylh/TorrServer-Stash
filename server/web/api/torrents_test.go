@@ -2,10 +2,13 @@ package api
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/anacrolix/torrent"
@@ -168,5 +171,169 @@ func TestListHasNoPinKeys(t *testing.T) {
 		if strings.HasPrefix(key, "pin_") {
 			t.Errorf("list item has %s", key)
 		}
+	}
+}
+
+// fakeRPC is a Transmission endpoint without the session handshake; fail,
+// when set, is the result string of every call.
+type fakeRPC struct {
+	mu      sync.Mutex
+	methods []string
+	fail    string
+}
+
+func (f *fakeRPC) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	body, _ := io.ReadAll(r.Body)
+	var req struct {
+		Method string `json:"method"`
+	}
+	_ = json.Unmarshal(body, &req)
+	f.mu.Lock()
+	f.methods = append(f.methods, req.Method)
+	fail := f.fail
+	f.mu.Unlock()
+	switch {
+	case fail != "":
+		io.WriteString(w, `{"result":"`+fail+`","arguments":{}}`)
+	case req.Method == "torrent-add":
+		io.WriteString(w, `{"result":"success","arguments":{"torrent-duplicate":{"id":1,"name":"n","hashString":"x"}}}`)
+	default:
+		io.WriteString(w, `{"result":"success","arguments":{}}`)
+	}
+}
+
+func (f *fakeRPC) calls() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.methods...)
+}
+
+func withFakeRPC(t *testing.T) *fakeRPC {
+	t.Helper()
+	f := &fakeRPC{}
+	srv := httptest.NewServer(f)
+	t.Cleanup(srv.Close)
+	sets.BTsets.RemoteDownloader = sets.RemoteDownloaderConfig{Type: sets.DefaultRemoteDownloaderType, URL: srv.URL + "/transmission/rpc"}
+	return f
+}
+
+func rowFlag(t *testing.T, hash metainfo.Hash) bool {
+	t.Helper()
+	for _, db := range sets.ListTorrent() {
+		if db.InfoHash == hash {
+			return db.RemoteDownload
+		}
+	}
+	t.Fatal("row missing")
+	return false
+}
+
+func TestRemoteActionOnAndOff(t *testing.T) {
+	withTorrentsAPI(t)
+	f := withFakeRPC(t)
+	hash := addDBTorrent(1)
+
+	w := postTorrents(`{"action":"remote","hash":"` + hash.HexString() + `","remote_download":true}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("on: status = %d, body %s", w.Code, w.Body)
+	}
+	if !strings.Contains(w.Body.String(), `"remote_download":true`) || !rowFlag(t, hash) {
+		t.Fatalf("on: flag not set, body %s", w.Body)
+	}
+	w = postTorrents(`{"action":"remote","hash":"` + hash.HexString() + `","remote_download":false}`)
+	if w.Code != http.StatusOK || strings.Contains(w.Body.String(), "remote_download") || rowFlag(t, hash) {
+		t.Fatalf("off: status = %d, body %s", w.Code, w.Body)
+	}
+	if got := f.calls(); !reflect.DeepEqual(got, []string{"torrent-add", "torrent-remove"}) {
+		t.Fatalf("calls = %v", got)
+	}
+}
+
+func TestRemoteActionErrors(t *testing.T) {
+	withTorrentsAPI(t)
+	hash := addDBTorrent(1)
+	h := hash.HexString()
+
+	cases := []struct {
+		name string
+		body string
+		want int
+	}{
+		{"no hash", `{"action":"remote","remote_download":true}`, http.StatusBadRequest},
+		{"no remote_download", `{"action":"remote","hash":"` + h + `"}`, http.StatusBadRequest},
+		{"not configured", `{"action":"remote","hash":"` + h + `","remote_download":true}`, http.StatusBadRequest},
+		{"unknown hash", `{"action":"remote","hash":"` + strings.Repeat("ab", 20) + `","remote_download":true}`, http.StatusNotFound},
+		{"invalid hash", `{"action":"remote","hash":"xyz","remote_download":true}`, http.StatusNotFound},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := postTorrents(tc.body)
+			if w.Code != tc.want {
+				t.Fatalf("status = %d, want %d, body %s", w.Code, tc.want, w.Body)
+			}
+			if errorBody(t, w) == "" {
+				t.Fatalf("no error message in %s", w.Body)
+			}
+		})
+	}
+
+	f := withFakeRPC(t)
+	f.fail = "disk full"
+	w := postTorrents(`{"action":"remote","hash":"` + h + `","remote_download":true}`)
+	if w.Code != http.StatusBadGateway || !strings.Contains(errorBody(t, w), "disk full") {
+		t.Fatalf("rpc failure: status = %d, body %s", w.Code, w.Body)
+	}
+	if rowFlag(t, hash) {
+		t.Fatal("flag saved after RPC failure")
+	}
+
+	sets.ReadOnly = true
+	if w := postTorrents(`{"action":"remote","hash":"` + h + `","remote_download":true}`); w.Code != http.StatusForbidden {
+		t.Fatalf("read-only: status = %d, body %s", w.Code, w.Body)
+	}
+}
+
+func TestRemFlaggedFailureKeepsTorrent(t *testing.T) {
+	withTorrentsAPI(t)
+	f := withFakeRPC(t)
+	hash := addDBTorrent(1)
+	sets.SetTorrentRemoteDownload(hash, true)
+	f.fail = "boom"
+
+	w := postTorrents(`{"action":"rem","hash":"` + hash.HexString() + `"}`)
+	if w.Code != http.StatusBadGateway || !strings.Contains(errorBody(t, w), "boom") {
+		t.Fatalf("status = %d, body %s", w.Code, w.Body)
+	}
+	if !rowFlag(t, hash) {
+		t.Fatal("flag lost")
+	}
+
+	f.fail = ""
+	if w := postTorrents(`{"action":"rem","hash":"` + hash.HexString() + `"}`); w.Code != http.StatusOK {
+		t.Fatalf("retry: status = %d, body %s", w.Code, w.Body)
+	}
+	if len(sets.ListTorrent()) != 0 {
+		t.Fatal("row kept after a successful rem")
+	}
+}
+
+func TestWipeReportsFlaggedFailures(t *testing.T) {
+	withTorrentsAPI(t)
+	f := withFakeRPC(t)
+	flagged := addDBTorrent(1)
+	addDBTorrent(2)
+	sets.SetTorrentRemoteDownload(flagged, true)
+	f.fail = "boom"
+
+	w := postTorrents(`{"action":"wipe"}`)
+	if w.Code != http.StatusBadGateway || !strings.Contains(errorBody(t, w), "1 torrent(s) not removed") {
+		t.Fatalf("status = %d, body %s", w.Code, w.Body)
+	}
+	rows := sets.ListTorrent()
+	if len(rows) != 1 || rows[0].InfoHash != flagged {
+		t.Fatalf("rows = %v, want only the flagged one", rows)
+	}
+	if got := f.calls(); !reflect.DeepEqual(got, []string{"torrent-remove"}) {
+		t.Fatalf("calls = %v, want one remove for the flagged torrent", got)
 	}
 }

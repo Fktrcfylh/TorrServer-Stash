@@ -33,6 +33,10 @@ type Torrent struct {
 	Timestamp int64
 	Size      int64
 
+	// RemoteDownload mirrors the DB row's flag for Status; guarded by
+	// muTorrent. Decisions read the row, not this copy.
+	RemoteDownload bool
+
 	*torrent.Torrent
 	muTorrent sync.Mutex
 
@@ -397,6 +401,7 @@ func (t *Torrent) Status() *state.TorrentStatus {
 	st.TorrentSize = t.Size
 	st.BitRate = t.BitRate
 	st.DurationSeconds = t.DurationSeconds
+	st.RemoteDownload = t.RemoteDownload
 
 	if t.TorrentSpec != nil {
 		st.Hash = t.TorrentSpec.InfoHash.HexString()

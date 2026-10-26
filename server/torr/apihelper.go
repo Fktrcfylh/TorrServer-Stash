@@ -43,6 +43,7 @@ func LoadTorrent(tor *Torrent) *Torrent {
 	tr.Title = tor.Title
 	tr.Poster = tor.Poster
 	tr.Data = tor.Data
+	tr.setRemoteDownload(tor.remoteDownload())
 	return tr
 }
 
@@ -86,6 +87,11 @@ func AddTorrent(spec *torrent.TorrentSpec, title, poster string, data string, ca
 		}
 	}
 
+	// the DB row owns the remote flag, the in-memory torrent mirrors it
+	if torDB != nil {
+		torr.setRemoteDownload(torDB.RemoteDownload)
+	}
+
 	return torr, nil
 }
 
@@ -119,6 +125,7 @@ func GetTorrent(hashHex string) *Torrent {
 				tr.Size = tor.Size
 				tr.Timestamp = tor.Timestamp
 				tr.Category = tor.Category
+				tr.setRemoteDownload(tor.RemoteDownload)
 				tr.GotInfo()
 			}
 		}()
@@ -167,12 +174,20 @@ func SetTorrent(hashHex, title, poster, category string, data string) *Torrent {
 	}
 }
 
-func RemTorrent(hashHex string) {
+// RemTorrent removes a torrent from memory, disk cache and DB. A torrent
+// flagged for the remote downloader is removed there first, with its data;
+// if that fails the torrent is kept and the error returned.
+func RemTorrent(hashHex string) error {
 	if sets.ReadOnly {
 		log.TLogln("API RemTorrent: Read-only DB mode!", hashHex)
-		return
+		return nil
 	}
 	hash := metainfo.NewHashFromHex(hashHex)
+
+	defer lockRemote(hash)()
+	if err := removeRemote(hash); err != nil {
+		return err
+	}
 
 	// Download the torrent before deleting it to get the "closed" status
 	torr := bts.GetTorrent(hash)
@@ -183,7 +198,7 @@ func RemTorrent(hashHex string) {
 			name := filepath.Join(sets.BTsets.TorrentsSavePath, hashHex)
 			os.RemoveAll(name)
 		}
-		return
+		return nil
 	}
 
 	closedChan := torr.closed
@@ -211,6 +226,7 @@ func RemTorrent(hashHex string) {
 
 	// Delete from the database
 	RemTorrentDB(hash)
+	return nil
 }
 
 func ListTorrent() []*Torrent {

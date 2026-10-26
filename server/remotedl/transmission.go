@@ -3,7 +3,9 @@ package remotedl
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -83,6 +85,75 @@ func (t *transmission) Session(ctx context.Context) (SessionInfo, error) {
 		log.TLogln("remotedl: warning: Transmission reports lpd-enabled=false; enable it in settings.json so TorrServer finds the NAS via LPD, url:", t.url)
 	}
 	return info, nil
+}
+
+type torrentAddArgs struct {
+	Metainfo    string `json:"metainfo,omitempty"`
+	Filename    string `json:"filename,omitempty"`
+	DownloadDir string `json:"download-dir,omitempty"`
+}
+
+type addedTorrent struct {
+	ID         int    `json:"id"`
+	Name       string `json:"name"`
+	HashString string `json:"hashString"`
+}
+
+type torrentAddReply struct {
+	Added     *addedTorrent `json:"torrent-added"`
+	Duplicate *addedTorrent `json:"torrent-duplicate"`
+}
+
+// Add runs torrent-add with metainfo (base64 .torrent) or filename (magnet).
+func (t *transmission) Add(ctx context.Context, req AddRequest) (AddResult, error) {
+	if (len(req.Metainfo) == 0) == (req.Magnet == "") {
+		return AddResult{}, errors.New("transmission torrent-add: exactly one of metainfo and magnet is required")
+	}
+	args := torrentAddArgs{Filename: req.Magnet, DownloadDir: req.DownloadDir}
+	if len(req.Metainfo) > 0 {
+		args.Metainfo = base64.StdEncoding.EncodeToString(req.Metainfo)
+	}
+	var reply torrentAddReply
+	if err := t.call(ctx, "torrent-add", args, &reply); err != nil {
+		return AddResult{}, err
+	}
+	switch {
+	case reply.Added != nil:
+		return AddResult{Hash: reply.Added.HashString, Name: reply.Added.Name}, nil
+	case reply.Duplicate != nil:
+		return AddResult{Hash: reply.Duplicate.HashString, Name: reply.Duplicate.Name, Duplicate: true}, nil
+	default:
+		return AddResult{}, errors.New("transmission torrent-add: response has neither torrent-added nor torrent-duplicate")
+	}
+}
+
+type torrentRemoveArgs struct {
+	IDs             []string `json:"ids"`
+	DeleteLocalData bool     `json:"delete-local-data"`
+}
+
+// Remove runs torrent-remove for one hash with delete-local-data. An empty or
+// missing ids list makes Transmission remove every torrent, so anything but a
+// 40-hex hash is refused before a request is built.
+func (t *transmission) Remove(ctx context.Context, hash string) error {
+	if !isInfoHash(hash) {
+		return fmt.Errorf("transmission torrent-remove: refusing invalid info hash %q", hash)
+	}
+	args := torrentRemoveArgs{IDs: []string{strings.ToLower(hash)}, DeleteLocalData: true}
+	return t.call(ctx, "torrent-remove", args, nil)
+}
+
+// isInfoHash reports whether s is a v1 info hash: exactly 40 hex chars.
+func isInfoHash(s string) bool {
+	if len(s) != 40 {
+		return false
+	}
+	for _, c := range s {
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F') {
+			return false
+		}
+	}
+	return true
 }
 
 func (t *transmission) getSessionID() string {

@@ -73,3 +73,44 @@ func TestNewParseErrorHidesURL(t *testing.T) {
 		t.Fatalf("error leaks the password: %v", err)
 	}
 }
+
+func TestSharedReusesAndRebuilds(t *testing.T) {
+	cfg := settings.RemoteDownloaderConfig{Type: "transmission", URL: "http://192.0.2.1:9091/transmission/rpc"}
+	a, err := Shared(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := Shared(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a != b {
+		t.Fatal("same config built a new client")
+	}
+	cfg.Password = "changed"
+	c, err := Shared(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c == a {
+		t.Fatal("changed config reused the old client")
+	}
+	if tr := c.(*transmission); tr.password != "changed" {
+		t.Fatalf("password = %q", tr.password)
+	}
+}
+
+func TestSharedDisabledCachesNothing(t *testing.T) {
+	cfg := settings.RemoteDownloaderConfig{Type: "transmission", URL: "http://192.0.2.2:9091/transmission/rpc"}
+	a, err := Shared(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d, err := Shared(settings.RemoteDownloaderConfig{Type: "transmission"}); !errors.Is(err, ErrDisabled) || d != nil {
+		t.Fatalf("got (%v, %v), want (nil, ErrDisabled)", d, err)
+	}
+	b, err := Shared(cfg)
+	if err != nil || b != a {
+		t.Fatalf("disabled call replaced the cached client: %v %v", b, err)
+	}
+}

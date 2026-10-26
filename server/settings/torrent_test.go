@@ -116,3 +116,64 @@ func TestAddTorrentWritesOnlyItsRow(t *testing.T) {
 		t.Fatal("saved row missing")
 	}
 }
+
+func TestSetTorrentRemoteDownloadWritesOnlyFlag(t *testing.T) {
+	withTestDB(t)
+	hash := testHash(1)
+	AddTorrent(&TorrentDB{TorrentSpec: &torrent.TorrentSpec{InfoHash: hash}, Title: "t", Timestamp: 7})
+
+	if !SetTorrentRemoteDownload(hash, true) {
+		t.Fatal("setter reported no row")
+	}
+	got := findRow(t, hash)
+	if got == nil || !got.RemoteDownload || got.Title != "t" || got.Timestamp != 7 {
+		t.Fatalf("row after set on: %+v", got)
+	}
+	if !SetTorrentRemoteDownload(hash, false) {
+		t.Fatal("setter reported no row")
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(tdb.Get("Torrents", hash.HexString()), &raw); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := raw["remote_download"]; ok {
+		t.Fatalf("off flag still stored: %s", tdb.Get("Torrents", hash.HexString()))
+	}
+}
+
+func TestSetTorrentRemoteDownloadWithoutRow(t *testing.T) {
+	withTestDB(t)
+	hash := testHash(2)
+	if SetTorrentRemoteDownload(hash, true) {
+		t.Fatal("setter reported success without a row")
+	}
+	if findRow(t, hash) != nil {
+		t.Fatal("setter created a row")
+	}
+}
+
+// A general save never changes the stored flag; a new row takes the passed one.
+func TestAddTorrentKeepsStoredRemoteFlag(t *testing.T) {
+	withTestDB(t)
+	hash := testHash(3)
+	AddTorrent(&TorrentDB{TorrentSpec: &torrent.TorrentSpec{InfoHash: hash}, Title: "a"})
+	SetTorrentRemoteDownload(hash, true)
+
+	AddTorrent(&TorrentDB{TorrentSpec: &torrent.TorrentSpec{InfoHash: hash}, Title: "b"})
+	got := findRow(t, hash)
+	if got == nil || !got.RemoteDownload || got.Title != "b" {
+		t.Fatalf("save cleared the flag: %+v", got)
+	}
+
+	SetTorrentRemoteDownload(hash, false)
+	AddTorrent(&TorrentDB{TorrentSpec: &torrent.TorrentSpec{InfoHash: hash}, Title: "c", RemoteDownload: true})
+	if got := findRow(t, hash); got.RemoteDownload {
+		t.Fatal("save set the flag on an existing row")
+	}
+
+	fresh := testHash(4)
+	AddTorrent(&TorrentDB{TorrentSpec: &torrent.TorrentSpec{InfoHash: fresh}, RemoteDownload: true})
+	if got := findRow(t, fresh); got == nil || !got.RemoteDownload {
+		t.Fatalf("new row lost the passed flag: %+v", got)
+	}
+}

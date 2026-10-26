@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -19,7 +20,7 @@ import (
 	"github.com/pkg/errors"
 )
 
-// Action: add, get, set, rem, list, drop
+// Action: add, get, set, rem, list, drop, wipe, remote
 type torrReqJS struct {
 	requestI
 	Link     string `json:"link,omitempty"`
@@ -29,21 +30,32 @@ type torrReqJS struct {
 	Poster   string `json:"poster,omitempty"`
 	Data     string `json:"data,omitempty"`
 	SaveToDB bool   `json:"save_to_db,omitempty"`
+	// Required for action remote: true adds the torrent to the remote
+	// downloader, false removes it there with its data.
+	// A pointer: a missing key is rejected, it never means false.
+	RemoteDownload *bool `json:"remote_download,omitempty"`
 }
 
 // torrents godoc
 //
 //	@Summary		Handle torrents informations
-//	@Description	Allow to list, add, remove, get, set, drop, wipe torrents on server. The action depends of what has been asked.
+//	@Description	Allow to list, add, remove, get, set, drop, wipe torrents on server, and to add a torrent to / remove it from the remote downloader (remote). The action depends of what has been asked.
+//	@Description	remote: synchronous; remote_download=true runs torrent-add, false runs torrent-remove with its data (nothing is sent when the torrent is not flagged). The flag is saved only on success.
+//	@Description	rem/wipe of a torrent flagged for the remote downloader remove it there first; on failure the torrent is kept and an error is returned.
 //
 //	@Tags			API
 //
-//	@Param			request	body	torrReqJS	true	"Torrent request. Available params for action: add, get, set, rem, list, drop, wipe. link required for add, hash required for get, set, rem, drop."
+//	@Param			request	body	torrReqJS	true	"Torrent request. Available params for action: add, get, set, rem, list, drop, wipe, remote. link required for add, hash required for get, set, rem, drop, remote; remote_download required for remote."
 //
 //	@Accept			json
 //	@Produce		json
 //	@Security		BasicAuth
-//	@Success		200
+//	@Success		200	{object}	state.TorrentStatus	"add, get, remote: torrent status"
+//	@Failure		400	{object}	map[string]string	"bad request, or remote downloader not configured"
+//	@Failure		403	{object}	map[string]string	"remote: read-only DB mode"
+//	@Failure		404	{object}	map[string]string	"remote: torrent not found"
+//	@Failure		409	{object}	map[string]string	"remote: torrent not in DB and its info is not loaded yet"
+//	@Failure		502	{object}	map[string]string	"remote, rem, wipe: remote downloader RPC failed"
 //	@Router			/torrents [post]
 func torrents(c *gin.Context) {
 	var req torrReqJS
@@ -80,6 +92,10 @@ func torrents(c *gin.Context) {
 	case "wipe":
 		{
 			wipeTorrents(c)
+		}
+	case "remote":
+		{
+			remoteTorrent(req, c)
 		}
 	default:
 		{
@@ -190,7 +206,10 @@ func remTorrent(req torrReqJS, c *gin.Context) {
 		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "hash is empty"})
 		return
 	}
-	torr.RemTorrent(req.Hash)
+	if err := torr.RemTorrent(req.Hash); err != nil {
+		c.AbortWithStatusJSON(remoteErrorStatus(err), gin.H{"error": err.Error()})
+		return
+	}
 	gstreamer.Remove(req.Hash)
 	// TODO: remove
 	if set.BTsets.EnableDLNA {
@@ -225,9 +244,17 @@ func dropTorrent(req torrReqJS, c *gin.Context) {
 
 func wipeTorrents(c *gin.Context) {
 	torrents := torr.ListTorrent()
+	var failed int
+	var firstErr error
 	for _, t := range torrents {
 		hash := t.TorrentSpec.InfoHash.HexString()
-		torr.RemTorrent(hash)
+		if err := torr.RemTorrent(hash); err != nil {
+			failed++
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
 		gstreamer.Remove(hash)
 	}
 	// TODO: remove (copied todo from remTorrent())
@@ -235,5 +262,44 @@ func wipeTorrents(c *gin.Context) {
 		dlna.Stop()
 		dlna.Start()
 	}
+	if failed > 0 {
+		log.TLogln("API wipe: torrents not removed:", failed, "first error:", firstErr)
+		c.AbortWithStatusJSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("%d torrent(s) not removed: %v", failed, firstErr)})
+		return
+	}
 	c.Status(200)
+}
+
+func remoteTorrent(req torrReqJS, c *gin.Context) {
+	if req.Hash == "" {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "hash is empty"})
+		return
+	}
+	if req.RemoteDownload == nil {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "remote_download is required"})
+		return
+	}
+	tor, err := torr.SetTorrentRemote(req.Hash, *req.RemoteDownload)
+	if err != nil {
+		c.AbortWithStatusJSON(remoteErrorStatus(err), gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, tor.Status())
+}
+
+// remoteErrorStatus maps errors of remote downloader writes to HTTP statuses;
+// anything not recognised is an RPC failure of the client (502).
+func remoteErrorStatus(err error) int {
+	switch {
+	case errors.Is(err, torr.ErrRemoteConfig):
+		return http.StatusBadRequest
+	case errors.Is(err, torr.ErrTorrentNotFound):
+		return http.StatusNotFound
+	case errors.Is(err, torr.ErrReadOnly):
+		return http.StatusForbidden
+	case errors.Is(err, torr.ErrInfoPending):
+		return http.StatusConflict
+	default:
+		return http.StatusBadGateway
+	}
 }

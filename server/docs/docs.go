@@ -1573,7 +1573,7 @@ const docTemplate = `{
                         "BasicAuth": []
                     }
                 ],
-                "description": "Allow to list, add, remove, get, set, drop, wipe torrents on server. The action depends of what has been asked.",
+                "description": "Allow to list, add, remove, get, set, drop, wipe torrents on server, and to add a torrent to / remove it from the remote downloader (remote). The action depends of what has been asked.\nremote: synchronous; remote_download=true runs torrent-add, false runs torrent-remove with its data (nothing is sent when the torrent is not flagged). The flag is saved only on success.\nrem/wipe of a torrent flagged for the remote downloader remove it there first; on failure the torrent is kept and an error is returned.",
                 "consumes": [
                     "application/json"
                 ],
@@ -1586,7 +1586,7 @@ const docTemplate = `{
                 "summary": "Handle torrents informations",
                 "parameters": [
                     {
-                        "description": "Torrent request. Available params for action: add, get, set, rem, list, drop, wipe. link required for add, hash required for get, set, rem, drop.",
+                        "description": "Torrent request. Available params for action: add, get, set, rem, list, drop, wipe, remote. link required for add, hash required for get, set, rem, drop, remote; remote_download required for remote.",
                         "name": "request",
                         "in": "body",
                         "required": true,
@@ -1597,7 +1597,55 @@ const docTemplate = `{
                 ],
                 "responses": {
                     "200": {
-                        "description": "OK"
+                        "description": "add, get, remote: torrent status",
+                        "schema": {
+                            "$ref": "#/definitions/state.TorrentStatus"
+                        }
+                    },
+                    "400": {
+                        "description": "bad request, or remote downloader not configured",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "remote: read-only DB mode",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "remote: torrent not found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "remote: torrent not in DB and its info is not loaded yet",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "502": {
+                        "description": "remote, rem, wipe: remote downloader RPC failed",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
                     }
                 }
             }
@@ -1970,6 +2018,10 @@ const docTemplate = `{
                 },
                 "poster": {
                     "type": "string"
+                },
+                "remote_download": {
+                    "description": "Required for action remote: true adds the torrent to the remote\ndownloader, false removes it there with its data.\nA pointer: a missing key is rejected, it never means false.",
+                    "type": "boolean"
                 },
                 "save_to_db": {
                     "type": "boolean"
@@ -2601,6 +2653,9 @@ const docTemplate = `{
                 },
                 "preloaded_bytes": {
                     "type": "integer"
+                },
+                "remote_download": {
+                    "type": "boolean"
                 },
                 "stat": {
                     "$ref": "#/definitions/state.TorrentStat"
