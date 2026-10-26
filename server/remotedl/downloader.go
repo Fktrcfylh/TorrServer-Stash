@@ -44,6 +44,28 @@ type AddResult struct {
 	Duplicate bool
 }
 
+// Remote torrent states reported by Status.
+const (
+	StateDownloading = "downloading"
+	StateSeeding     = "seeding"
+	StateQueued      = "queued"
+	StateStopped     = "stopped"
+	StateChecking    = "checking"
+	StateError       = "error"
+	// StateMissing: the client does not have the torrent.
+	StateMissing = "missing"
+)
+
+// RemoteStatus is the state of one torrent in the client. Progress is the
+// downloaded share in percent (0..100, one decimal); it is 0 for a missing
+// torrent. Error is the client's error text, also set for warnings that do
+// not make the state StateError.
+type RemoteStatus struct {
+	State    string
+	Progress float64
+	Error    string
+}
+
 // Downloader is a remote torrent client.
 type Downloader interface {
 	// Session returns the client's version, RPC version, peer port and LPD flag.
@@ -53,6 +75,10 @@ type Downloader interface {
 	// Remove removes one torrent by its v1 info hash (40 hex chars) together
 	// with its downloaded data. Any other hash is refused before a request.
 	Remove(ctx context.Context, hash string) error
+	// Status reports the torrents with the given v1 info hashes in one
+	// request, keyed by lowercase hash; a hash the client does not have maps
+	// to StateMissing. Any invalid hash is refused before a request.
+	Status(ctx context.Context, hashes []string) (map[string]RemoteStatus, error)
 }
 
 var (

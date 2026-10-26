@@ -186,6 +186,9 @@ func getTorrent(req torrReqJS, c *gin.Context) {
 
 	if tor != nil {
 		st := tor.Status()
+		if st.RemoteDownload {
+			torr.RefreshRemoteStatus()
+		}
 		c.JSON(200, st)
 	} else {
 		c.Status(http.StatusNotFound)
@@ -226,8 +229,14 @@ func listTorrents(c *gin.Context) {
 		return
 	}
 	var stats []*state.TorrentStatus
+	flagged := false
 	for _, tr := range list {
-		stats = append(stats, tr.Status())
+		st := tr.Status()
+		flagged = flagged || st.RemoteDownload
+		stats = append(stats, st)
+	}
+	if flagged {
+		torr.RefreshRemoteStatus() // async; this list shows the current snapshot
 	}
 	c.JSON(200, stats)
 }

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"strings"
 	"sync"
@@ -146,6 +147,101 @@ func (t *transmission) Remove(ctx context.Context, hash string) error {
 	}
 	args := torrentRemoveArgs{IDs: []string{strings.ToLower(hash)}, DeleteLocalData: true}
 	return t.call(ctx, "torrent-remove", args, nil)
+}
+
+type torrentGetArgs struct {
+	IDs    []string `json:"ids"`
+	Fields []string `json:"fields"`
+}
+
+type torrentGetReply struct {
+	Torrents []struct {
+		HashString  string  `json:"hashString"`
+		Status      int     `json:"status"`
+		PercentDone float64 `json:"percentDone"`
+		Error       int     `json:"error"`
+		ErrorString string  `json:"errorString"`
+	} `json:"torrents"`
+}
+
+// torrentGetFields are the only fields Status asks for.
+var torrentGetFields = []string{"hashString", "status", "percentDone", "error", "errorString"}
+
+// Transmission torrent status and error codes (rpc-version 15).
+const (
+	trStopped = iota
+	trCheckWait
+	trCheck
+	trDownloadWait
+	trDownload
+	trSeedWait
+	trSeed
+
+	// trLocalError: the daemon's own failure (disk full, permissions); tracker
+	// warnings (1) and errors (2) leave the torrent transferring.
+	trLocalError = 3
+)
+
+// Status runs one torrent-get for all hashes. Without ids torrent-get returns
+// every torrent, so an empty list sends no request.
+func (t *transmission) Status(ctx context.Context, hashes []string) (map[string]RemoteStatus, error) {
+	out := make(map[string]RemoteStatus, len(hashes))
+	if len(hashes) == 0 {
+		return out, nil
+	}
+	ids := make([]string, 0, len(hashes))
+	for _, h := range hashes {
+		if !isInfoHash(h) {
+			return nil, fmt.Errorf("transmission torrent-get: refusing invalid info hash %q", h)
+		}
+		h = strings.ToLower(h)
+		if _, dup := out[h]; !dup {
+			ids = append(ids, h)
+			out[h] = RemoteStatus{State: StateMissing}
+		}
+	}
+	var reply torrentGetReply
+	if err := t.call(ctx, "torrent-get", torrentGetArgs{IDs: ids, Fields: torrentGetFields}, &reply); err != nil {
+		return nil, err
+	}
+	for _, tr := range reply.Torrents {
+		h := strings.ToLower(tr.HashString)
+		if _, asked := out[h]; !asked {
+			continue
+		}
+		st := RemoteStatus{
+			State:    transmissionState(tr.Status),
+			Progress: math.Round(tr.PercentDone*1000) / 10,
+		}
+		if tr.Error != 0 {
+			st.Error = tr.ErrorString
+			if tr.Error == trLocalError {
+				st.State = StateError
+			}
+		}
+		if st.State == "" {
+			st.State, st.Error = StateError, fmt.Sprintf("unknown transmission status %d", tr.Status)
+		}
+		out[h] = st
+	}
+	return out, nil
+}
+
+func transmissionState(status int) string {
+	switch status {
+	case trStopped:
+		return StateStopped
+	case trCheckWait, trCheck:
+		return StateChecking
+	case trDownloadWait, trSeedWait:
+		return StateQueued
+	case trDownload:
+		return StateDownloading
+	case trSeed:
+		return StateSeeding
+	default:
+		return ""
+	}
 }
 
 // isInfoHash reports whether s is a v1 info hash: exactly 40 hex chars.

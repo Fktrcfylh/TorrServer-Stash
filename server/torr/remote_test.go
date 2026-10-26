@@ -19,6 +19,7 @@ import (
 	"github.com/anacrolix/torrent/bencode"
 	"github.com/anacrolix/torrent/metainfo"
 
+	"server/remotedl"
 	"server/settings"
 )
 
@@ -81,6 +82,10 @@ func withRemote(t *testing.T) *fakeRemote {
 	lockedPeerSeams(t, func(context.Context, settings.RemoteDownloaderConfig) (torrent.Peer, error) {
 		return torrent.Peer{}, errors.New("no NAS peer in this test")
 	}, nil)
+	// and torrent-get of the status cache too
+	lockedStatusSeams(t, func(context.Context, settings.RemoteDownloaderConfig, []string) (map[string]remotedl.RemoteStatus, error) {
+		return nil, nil
+	}, time.Hour)
 	return f
 }
 

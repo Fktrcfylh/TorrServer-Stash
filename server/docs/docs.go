@@ -2657,6 +2657,18 @@ const docTemplate = `{
                 "remote_download": {
                     "type": "boolean"
                 },
+                "remote_error": {
+                    "description": "RemoteError is the client's error text for the torrent, or why its\nstatus could not be read (client unreachable, RPC error).",
+                    "type": "string"
+                },
+                "remote_progress": {
+                    "description": "RemoteProgress is the remote download progress in percent (0..100);\npresent, also at 0, whenever the client reported the torrent.",
+                    "type": "number"
+                },
+                "remote_state": {
+                    "description": "RemoteState is the torrent's state in the remote downloader\n(downloading, seeding, queued, stopped, checking, error, missing); only\nfor flagged torrents, absent until the first status refresh.",
+                    "type": "string"
+                },
                 "stat": {
                     "$ref": "#/definitions/state.TorrentStat"
                 },

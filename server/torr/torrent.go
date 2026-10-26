@@ -476,6 +476,9 @@ func (t *Torrent) Status() *state.TorrentStatus {
 			}
 		}
 	}
+	if st.RemoteDownload && st.Hash != "" {
+		setRemoteStatus(st)
+	}
 
 	return st
 }

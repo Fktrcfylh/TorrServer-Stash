@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -175,6 +177,106 @@ func TestRemoveRPCError(t *testing.T) {
 	c := newFake(t, f)
 	err := c.Remove(context.Background(), testHashHex)
 	if err == nil || !strings.Contains(err.Error(), "HTTP 500") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+// hashN is a distinct valid info hash per n (0..15).
+func hashN(n int) string {
+	return strings.Repeat(string("0123456789abcdef"[n]), 40)
+}
+
+func TestStatusMapsStatesInOneBatch(t *testing.T) {
+	torrent := func(n, status int, done float64, errCode int, errStr string) string {
+		return fmt.Sprintf(`{"hashString":"%s","status":%d,"percentDone":%v,"error":%d,"errorString":"%s"}`, hashN(n), status, done, errCode, errStr)
+	}
+	list := []string{
+		torrent(0, 0, 0.5, 0, ""),
+		torrent(1, 1, 0, 0, ""),
+		torrent(2, 2, 0.1, 0, ""),
+		torrent(3, 3, 0, 0, ""),
+		torrent(4, 4, 0.12345, 0, ""),
+		torrent(5, 5, 1, 0, ""),
+		torrent(6, 6, 1, 0, ""),
+		torrent(7, 4, 0.3, 1, "tracker warning"),
+		torrent(8, 4, 0.3, 2, "tracker gone"),
+		torrent(9, 4, 0.3, 3, "No space left on device"),
+		torrent(10, 9, 0.2, 0, ""),
+		torrent(12, 6, 1, 0, ""), // not asked: ignored
+	}
+	f := &fakeTransmission{reply: replyWith(`{"result":"success","arguments":{"torrents":[` + strings.Join(list, ",") + `]}}`)}
+	c := newFake(t, f)
+
+	asked := []string{strings.ToUpper(hashN(10))}
+	for n := 0; n <= 11; n++ {
+		if n != 10 {
+			asked = append(asked, hashN(n))
+		}
+	}
+	asked = append(asked, hashN(1)) // duplicate: sent once
+	got, err := c.Status(context.Background(), asked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]RemoteStatus{
+		hashN(0):  {State: StateStopped, Progress: 50},
+		hashN(1):  {State: StateChecking},
+		hashN(2):  {State: StateChecking, Progress: 10},
+		hashN(3):  {State: StateQueued},
+		hashN(4):  {State: StateDownloading, Progress: 12.3},
+		hashN(5):  {State: StateQueued, Progress: 100},
+		hashN(6):  {State: StateSeeding, Progress: 100},
+		hashN(7):  {State: StateDownloading, Progress: 30, Error: "tracker warning"},
+		hashN(8):  {State: StateDownloading, Progress: 30, Error: "tracker gone"},
+		hashN(9):  {State: StateError, Progress: 30, Error: "No space left on device"},
+		hashN(10): {State: StateError, Progress: 20, Error: "unknown transmission status 9"},
+		hashN(11): {State: StateMissing},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("status =\n%+v\nwant\n%+v", got, want)
+	}
+	// one handshake 409 plus exactly one torrent-get
+	if n := f.requests.Load(); n != 2 {
+		t.Fatalf("requests = %d, want 2", n)
+	}
+	method, args := lastRequest(t, f)
+	if method != "torrent-get" {
+		t.Fatalf("method = %q", method)
+	}
+	ids, _ := args["ids"].([]any)
+	if len(ids) != 12 || ids[0] != hashN(10) {
+		t.Fatalf("ids = %v, want 12 lowercase unique hashes", args["ids"])
+	}
+	if !reflect.DeepEqual(args["fields"], []any{"hashString", "status", "percentDone", "error", "errorString"}) {
+		t.Fatalf("fields = %v", args["fields"])
+	}
+}
+
+// Without ids torrent-get would list every torrent of the client.
+func TestStatusEmptyOrInvalidHashesSendNoRequest(t *testing.T) {
+	f := &fakeTransmission{}
+	c := newFake(t, f)
+
+	got, err := c.Status(context.Background(), nil)
+	if err != nil || len(got) != 0 {
+		t.Fatalf("empty: got %v, %v", got, err)
+	}
+	for _, bad := range []string{"", "abc", strings.Repeat("g", 40)} {
+		if _, err := c.Status(context.Background(), []string{testHashHex, bad}); err == nil {
+			t.Fatalf("hash %q accepted", bad)
+		}
+	}
+	if n := f.requests.Load(); n != 0 {
+		t.Fatalf("requests = %d, want none", n)
+	}
+}
+
+func TestStatusRPCError(t *testing.T) {
+	f := &fakeTransmission{reply: replyWith(`{"result":"no such method","arguments":{}}`)}
+	c := newFake(t, f)
+
+	_, err := c.Status(context.Background(), []string{testHashHex})
+	if err == nil || !strings.Contains(err.Error(), "torrent-get: no such method") {
 		t.Fatalf("err = %v", err)
 	}
 }

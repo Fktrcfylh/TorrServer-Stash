@@ -66,6 +66,16 @@ type TorrentStatus struct {
 	DurationSeconds     float64     `json:"duration_seconds,omitempty"`
 	BitRate             string      `json:"bit_rate,omitempty"`
 	RemoteDownload      bool        `json:"remote_download,omitempty"`
+	// RemoteState is the torrent's state in the remote downloader
+	// (downloading, seeding, queued, stopped, checking, error, missing); only
+	// for flagged torrents, absent until the first status refresh.
+	RemoteState string `json:"remote_state,omitempty"`
+	// RemoteProgress is the remote download progress in percent (0..100);
+	// present, also at 0, whenever the client reported the torrent.
+	RemoteProgress *float64 `json:"remote_progress,omitempty"`
+	// RemoteError is the client's error text for the torrent, or why its
+	// status could not be read (client unreachable, RPC error).
+	RemoteError string `json:"remote_error,omitempty"`
 
 	FileStats []*TorrentFileStat `json:"file_stats,omitempty"`
 }

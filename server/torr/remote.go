@@ -149,6 +149,9 @@ func SetTorrentRemote(hashHex string, on bool) (*Torrent, error) {
 		return nil, fmt.Errorf("save remote flag of %s failed", hashHex)
 	}
 	row.RemoteDownload = on
+	if on {
+		invalidateRemoteStatus() // show the new torrent's state on the next list
+	}
 	if loaded != nil {
 		loaded.setRemoteDownload(on)
 		if on {
