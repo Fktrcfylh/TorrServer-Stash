@@ -2,8 +2,10 @@ package api
 
 import (
 	"bytes"
+	"crypto/sha1"
 	"encoding/hex"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"path/filepath"
@@ -11,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/anacrolix/missinggo/v2/httptoo"
 	"github.com/anacrolix/torrent/bencode"
@@ -20,6 +24,7 @@ import (
 	"server/torr"
 	"server/torr/state"
 	"server/utils"
+	"server/web/sslcerts"
 
 	"github.com/gin-gonic/gin"
 	"github.com/pkg/errors"
@@ -63,7 +68,7 @@ func allPlayList(c *gin.Context) {
 		torrs = filtered
 	}
 
-	host := utils.GetScheme(c) + "://" + utils.GetHost(c)
+	host := mediaBaseURL(c)
 	list := "#EXTM3U\n"
 	hash := ""
 	// fn=file.m3u fix forkplayer bug with end .m3u in link
@@ -103,21 +108,18 @@ func statusFromSpec(tr *torr.Torrent) *state.TorrentStatus {
 	st.Title = tr.Title
 	st.Name = info.Name
 
-	files := info.UpvertedFiles()
-	sort.Slice(files, func(i, j int) bool {
-		return strings.Join(files[i].Path, "/") < strings.Join(files[j].Path, "/")
-	})
-
-	for i, f := range files {
-		path := strings.Join(f.Path, "/")
-		if path == "" {
-			path = info.Name
-		}
+	// same paths and order as Torrent.Status, so the ids match what /stream resolves
+	for _, f := range info.UpvertedFiles() {
 		st.FileStats = append(st.FileStats, &state.TorrentFileStat{
-			Id:     i + 1,
-			Path:   path,
+			Path:   strings.Join(append([]string{info.BestName()}, f.BestPath()...), "/"),
 			Length: f.Length,
 		})
+	}
+	sort.Slice(st.FileStats, func(i, j int) bool {
+		return utils.CompareStrings(st.FileStats[i].Path, st.FileStats[j].Path)
+	})
+	for i, f := range st.FileStats {
+		f.Id = i + 1
 	}
 
 	return st
@@ -159,7 +161,7 @@ func playList(c *gin.Context) {
 		}
 	}
 
-	host := utils.GetScheme(c) + "://" + utils.GetHost(c)
+	host := mediaBaseURL(c)
 	list := getM3uList(tor.Status(), host, fromlast, index)
 	list = "#EXTM3U\n" + list
 	name := strings.ReplaceAll(c.Param("fname"), `/`, "") // strip starting / from param
@@ -176,8 +178,9 @@ func sendM3U(c *gin.Context, name, hash string, m3u string) {
 	c.Header("Content-Type", "audio/x-mpegurl")
 	c.Header("Connection", "close")
 	if hash != "" {
-		etag := hex.EncodeToString([]byte(fmt.Sprintf("%s/%s", hash, name)))
-		c.Header("ETag", httptoo.EncodeQuotedString(etag))
+		// The list changes with titles, viewed files and settings, so the tag covers the body.
+		sum := sha1.Sum([]byte(hash + "/" + name + "\n" + m3u))
+		c.Header("ETag", httptoo.EncodeQuotedString(hex.EncodeToString(sum[:])))
 	}
 	if name == "" {
 		name = "playlist.m3u"
@@ -235,13 +238,30 @@ func findFileNamesakes(files []*state.TorrentFileStat, file *state.TorrentFileSt
 	name := filepath.Base(strings.TrimSuffix(file.Path, filepath.Ext(file.Path)))
 	var namesakes []*state.TorrentFileStat
 	for _, f := range files {
-		if strings.Contains(f.Path, name) { // external tracks always include name of videofile
+		if containsName(f.Path, name) { // external tracks always include name of videofile
 			if f != file { // exclude itself
 				namesakes = append(namesakes, f)
 			}
 		}
 	}
 	return namesakes
+}
+
+// containsName reports whether name appears in path as a whole word at its
+// end, so "Show S01E1" matches "Show S01E1.rus.mka" but not "Show S01E10.mkv".
+func containsName(path, name string) bool {
+	for i := 0; ; {
+		j := strings.Index(path[i:], name)
+		if j < 0 {
+			return false
+		}
+		end := i + j + len(name)
+		next, _ := utf8.DecodeRuneInString(path[end:])
+		if end == len(path) || !(unicode.IsLetter(next) || unicode.IsDigit(next)) {
+			return true
+		}
+		i += j + 1
+	}
 }
 
 func searchLastPlayed(tor *state.TorrentStatus) int {
@@ -265,4 +285,42 @@ func searchLastPlayed(tor *state.TorrentStatus) int {
 	}
 
 	return -1
+}
+
+// mediaBaseURL is the scheme and host for links handed to media players. Players reject
+// TorrServer's self-signed certificate, so when the playlist was requested over it and the
+// plain HTTP port serves media, the links point at the HTTP port instead.
+func mediaBaseURL(c *gin.Context) string {
+	if c.Request.TLS != nil && sets.BTsets != nil && sets.Port != "" && sets.PlainHTTPServesMedia() &&
+		sslcerts.IsGenerated(sets.BTsets.SslCert, sets.BTsets.SslKey) {
+		host, _, err := net.SplitHostPort(c.Request.Host)
+		if err != nil {
+			host = strings.TrimSuffix(strings.TrimPrefix(c.Request.Host, "["), "]")
+		}
+		return "http://" + net.JoinHostPort(host, sets.Port)
+	}
+	return utils.GetScheme(c) + "://" + utils.GetHost(c)
+}
+
+type mediaBaseResponse struct {
+	Base string `json:"base"`
+}
+
+// mediaBase godoc
+//
+//	@Summary		Base URL for external players
+//	@Description	Scheme and host that links handed to external players (VLC, copied links)
+//	@Description	should use. It differs from the web UI origin when the UI is served over
+//	@Description	TorrServer's self-signed HTTPS certificate, which players reject, and the
+//	@Description	plain HTTP port serves media. In-page playback should keep using the UI origin.
+//
+//	@Tags			API
+//
+//	@Produce		json
+//	@Security		BasicAuth
+//	@Success		200	{object}	mediaBaseResponse
+//	@Router			/mediabase [get]
+func mediaBase(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
+	c.JSON(http.StatusOK, mediaBaseResponse{Base: mediaBaseURL(c)})
 }

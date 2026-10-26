@@ -86,7 +86,16 @@ func NewTorrent(spec *torrent.TorrentSpec, bt *BTServer) (*Torrent, error) {
 		}
 	}
 
+	// The read lock is taken and released explicitly, NOT with defer: the code below
+	// takes bt.mu.Lock() for the torrents map, and sync.RWMutex is not reentrant,
+	// so holding an RLock across that would self-deadlock.
+	bt.mu.RLock()
+	if bt.client == nil {
+		bt.mu.RUnlock()
+		return nil, errors.New("BT client not connected")
+	}
 	goTorrent, _, err := bt.client.AddTorrentSpec(spec)
+	bt.mu.RUnlock()
 	if err != nil {
 		return nil, err
 	}
@@ -119,7 +128,16 @@ func NewTorrent(spec *torrent.TorrentSpec, bt *BTServer) (*Torrent, error) {
 }
 
 func (t *Torrent) WaitInfo() bool {
-	if t == nil || t.Torrent == nil {
+	if t == nil {
+		return false
+	}
+	// drop() (Close, "drop all torrents") sets t.Torrent to nil at any moment, e.g. on
+	// "drop" from Lampa while stream requests wait here. Take the pointer once under
+	// muTorrent and use only it below: it stays valid after Drop, and t.closed fires.
+	t.muTorrent.Lock()
+	torrent := t.Torrent
+	t.muTorrent.Unlock()
+	if torrent == nil {
 		return false
 	}
 
@@ -127,14 +145,28 @@ func (t *Torrent) WaitInfo() bool {
 	tm := time.NewTimer(time.Minute + time.Second*time.Duration(settings.BTsets.TorrentDisconnectTimeout))
 
 	select {
-	case <-t.Torrent.GotInfo():
+	case <-torrent.GotInfo():
 		if t.TorrentSpec != nil && len(t.TorrentSpec.InfoBytes) == 0 {
-			t.TorrentSpec.InfoBytes = t.Torrent.Metainfo().InfoBytes
+			t.TorrentSpec.InfoBytes = torrent.Metainfo().InfoBytes
 		}
-		if t.bt != nil && t.bt.storage != nil {
-			t.cache = t.bt.storage.GetCache(t.Hash())
-			t.cache.SetTorrent(t.Torrent)
-			t.applyPin()
+		if t.bt != nil {
+			// bt.storage is replaced by Connect under bt.mu; snapshot it under the
+			// lock and use the snapshot afterwards, because the storage object keeps
+			// its own locking and is never closed. Reading the field unlocked was
+			// reported by -race and can tear the interface value.
+			t.bt.mu.RLock()
+			storage := t.bt.storage
+			t.bt.mu.RUnlock()
+			if storage != nil {
+				cache := storage.GetCache(t.Hash())
+				if cache == nil {
+					// torrent was dropped while waiting for info: CloseHash already removed the cache
+					return false
+				}
+				t.cache = cache
+				cache.SetTorrent(torrent)
+				t.applyPin()
+			}
 		}
 		return true
 	case <-t.closed:
@@ -199,20 +231,43 @@ func (t *Torrent) applyPin() {
 
 func (t *Torrent) GotInfo() bool {
 	// log.TLogln("GotInfo state:", t.Stat)
-	if t == nil || t.Stat == state.TorrentClosed {
+	if t == nil {
 		return false
 	}
-	// assume we have info in preload state
-	// and dont override with TorrentWorking
-	if t.Stat == state.TorrentPreload {
+	// Every stream request calls this, often several at once for one file. Once the info
+	// is in, only report it: flipping Stat through TorrentGettingInfo on each call raced
+	// with Status, Preload and Close, and could turn a closed torrent back into a working one.
+	t.muTorrent.Lock()
+	switch {
+	case t.Stat == state.TorrentClosed:
+		t.muTorrent.Unlock()
+		return false
+	case t.Stat == state.TorrentPreload:
+		// assume we have info in preload state
+		// and dont override with TorrentWorking
+		t.muTorrent.Unlock()
+		return true
+	case t.Stat == state.TorrentWorking && t.Torrent != nil && t.Torrent.Info() != nil:
+		t.muTorrent.Unlock()
+		t.AddExpiredTime(time.Second * time.Duration(settings.BTsets.TorrentDisconnectTimeout))
 		return true
 	}
 	// read before waiting: nothing after WaitInfo touches settings, so the end
 	// of an asynchronous load is ordered by the pin apply inside WaitInfo
 	timeout := time.Second * time.Duration(settings.BTsets.TorrentDisconnectTimeout)
 	t.Stat = state.TorrentGettingInfo
+	t.muTorrent.Unlock()
+
 	if t.WaitInfo() {
-		t.Stat = state.TorrentWorking
+		t.muTorrent.Lock()
+		if t.Stat == state.TorrentGettingInfo {
+			t.Stat = state.TorrentWorking
+		}
+		closed := t.Stat == state.TorrentClosed
+		t.muTorrent.Unlock()
+		if closed {
+			return false
+		}
 		t.AddExpiredTime(timeout)
 		return true
 	} else {
@@ -223,9 +278,11 @@ func (t *Torrent) GotInfo() bool {
 
 func (t *Torrent) AddExpiredTime(duration time.Duration) {
 	newExpiredTime := time.Now().Add(duration)
+	t.muTorrent.Lock()
 	if t.expiredTime.Before(newExpiredTime) {
 		t.expiredTime = newExpiredTime
 	}
+	t.muTorrent.Unlock()
 }
 
 func (t *Torrent) watch() {
@@ -305,7 +362,10 @@ func (t *Torrent) expired() bool {
 	if t.cache.PinPending() {
 		return false
 	}
-	return t.cache.Readers() == 0 && t.expiredTime.Before(time.Now()) && (t.Stat == state.TorrentWorking || t.Stat == state.TorrentClosed)
+	t.muTorrent.Lock()
+	stat, expiredTime := t.Stat, t.expiredTime
+	t.muTorrent.Unlock()
+	return t.cache.Readers() == 0 && expiredTime.Before(time.Now()) && (stat == state.TorrentWorking || stat == state.TorrentClosed)
 }
 
 func (t *Torrent) Files() []*torrent.File {
@@ -363,13 +423,17 @@ func (t *Torrent) Close() bool {
 	if t == nil {
 		return false
 	}
+	t.muTorrent.Lock()
 	if t.Stat == state.TorrentClosed {
+		t.muTorrent.Unlock()
 		return true
 	}
 	if settings.ReadOnly && t.cache != nil && t.cache.GetUseReaders() > 0 {
+		t.muTorrent.Unlock()
 		return false
 	}
 	t.Stat = state.TorrentClosed
+	t.muTorrent.Unlock()
 
 	if t.bt != nil {
 		t.bt.mu.Lock()
@@ -440,6 +504,8 @@ func (t *Torrent) Status() *state.TorrentStatus {
 		if t.Torrent.Info() != nil {
 			st.TorrentSize = t.Torrent.Length()
 
+			// Files returns the torrent's own slice, which also backs each piece's file list,
+			// so sortedFiles sorts a copy: sorting in place reorders it under concurrent readers.
 			files := sortedFiles(t.Files())
 			var pinFiles []pinFile
 			for i, f := range files {

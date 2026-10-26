@@ -45,13 +45,7 @@ func cmdFfp(c tele.Context) error {
 		return c.Send(tr(uid, "torrent_not_found"))
 	}
 
-	proto := "http"
-	port := settings.Port
-	if settings.Ssl {
-		proto = "https"
-		port = settings.SslPort
-	}
-	link := fmt.Sprintf("%s://127.0.0.1:%s/play/%s/%d?%s=1", proto, port, hash, id, torr.ProbeQuery)
+	link := fmt.Sprintf("%s/play/%s/%d?%s=1", settings.LoopbackBaseURL(), hash, id, torr.ProbeQuery)
 
 	data, err := ffprobe.ProbeUrl(link)
 	if err != nil {

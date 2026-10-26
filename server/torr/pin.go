@@ -193,6 +193,8 @@ func pinPieces(files []pinFile, pieceLength int64, pieceCount int, mode string, 
 // sortedFiles sorts files in place by path in natural order, which defines
 // the file ids (i+1), and returns them.
 func sortedFiles(files []*torrent.File) []*torrent.File {
+	// sort a copy: the torrent's own slice also backs each piece's file list
+	files = append([]*torrent.File(nil), files...)
 	sort.Slice(files, func(i, j int) bool {
 		return utils2.CompareStrings(files[i].Path(), files[j].Path())
 	})
