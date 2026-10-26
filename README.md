@@ -1,6 +1,59 @@
 > **TorrServer-Stash is a fork of [YouROK/TorrServer](https://github.com/YouROK/TorrServer).**
-> Everything below is the upstream README. Releases, install scripts and Docker images
+> Everything below the fork section is the upstream README. Releases, install scripts and Docker images
 > it links to are upstream builds and do not include the fork's changes. Build from source to get them.
+
+## What the fork adds: predownload to a NAS
+
+TorrServer can hand a torrent to a Transmission daemon on your LAN (a NAS), which downloads it in full.
+While you watch, TorrServer gets data from the NAS over the LAN, so playback depends less on how fast
+internet peers are right now. Only Transmission is supported. Tested with Transmission 2.82 (RPC 15).
+
+### Setup
+
+1. **Settings → NAS.** Fill in:
+   - **Client type**: `transmission`.
+   - **RPC URL**, e.g. `http://192.168.0.10:9091/transmission/rpc`. An empty URL disables the feature.
+   - **Username** / **Password** if Transmission RPC uses auth.
+   - **Download directory** on the NAS. Empty uses the Transmission default.
+2. Press **Test connection**. It tests the values in the form without saving them and shows the Transmission
+   version, RPC version, peer port and whether LPD is on. Then **Save** (this restarts the torrent client).
+   The same check over the API: `POST /settings {"action":"test_remote","remote_downloader":{...}}`.
+3. Open a torrent's details and tick **Download the whole torrent to the NAS**. The torrent card shows a
+   `NAS <progress>%` badge, and the `/torrents` status JSON carries `remote_download`, `remote_state`,
+   `remote_progress` and `remote_error`. API: `POST /torrents {"action":"remote","hash":"...","remote_download":true}`.
+
+### Transmission requirements
+
+- **Turn on LPD (`lpd-enabled`).** This is required. Transmission finds TorrServer through Local Peer Discovery
+  and connects to it. TorrServer also adds the NAS as a peer to flagged torrents, but that is best-effort: in a
+  busy swarm the connection queue fills within seconds and the NAS is never dialed. Two ways to turn LPD on:
+  - Over RPC, no restart:
+    `curl -s -H "X-Transmission-Session-Id: <id>" -d '{"method":"session-set","arguments":{"lpd-enabled":true}}' <rpc-url>`
+    (the first request without the header returns 409 with the id). Transmission writes it to `settings.json`
+    on a clean shutdown.
+  - Or stop the daemon, set `"lpd-enabled": true` in its `settings.json`, and start it again. Transmission
+    overwrites `settings.json` on exit, so edits made while it runs are lost.
+
+  To roll back, set `lpd-enabled` to `false` the same way.
+- **`rpc-whitelist`** must allow the TorrServer host (or set `rpc-whitelist-enabled` to `false`).
+  Otherwise RPC answers 403.
+- **Keep LPD on in TorrServer too** (**Settings → Additional → LPD (Local Peer Discovery)**, on by default).
+- **Same network segment.** LPD uses multicast, so TorrServer and the NAS must be on the same L2 segment.
+  A Docker bridge network blocks it. Run TorrServer with host networking.
+
+### What to expect
+
+- **Tick ahead of watching.** While Transmission is still downloading a busy public torrent, it chokes peers
+  that do not upload to it, and TorrServer gets little from it. Data flows best once the NAS is seeding.
+  Even then the NAS is one peer among many: TorrServer spreads requests across all connected peers.
+- **Download queue.** Transmission queues torrents beyond its download queue size (5 by default). A queued
+  torrent accepts no peers, so it does not help playback until it starts.
+- **Proxy.** With `--proxymode full` or `peers`, TorrServer dials the NAS through the proxy too, which may not reach the LAN. Use the default `tracker` mode.
+- **Unticking deletes data on the NAS.** Unticking, or removing a flagged torrent from TorrServer, removes the
+  torrent from Transmission together with its downloaded data. If the torrent was already in Transmission
+  before you ticked it, TorrServer treats it as its own and removes it too.
+- **Unflagging needs a configured NAS.** If you clear the RPC URL while torrents are still flagged, unticking or
+  removing them fails with an error and the torrent stays. Set the NAS back up first, or untick before clearing it.
 
 ---
 
