@@ -96,6 +96,12 @@ definitions:
     properties:
       action:
         type: string
+      remote_downloader:
+        allOf:
+        - $ref: '#/definitions/settings.RemoteDownloaderConfig'
+        description: |-
+          RemoteDownloader is an optional unsaved config for test_remote; the
+          saved one is tested when it is absent.
       sets:
         $ref: '#/definitions/settings.BTSets'
     type: object
@@ -264,6 +270,10 @@ definitions:
       readerReadAHead:
         description: in percent, 5%-100%, [...S__X__E...] [S-E] not clean
         type: integer
+      remoteDownloader:
+        allOf:
+        - $ref: '#/definitions/settings.RemoteDownloaderConfig'
+        description: Remote downloader (LAN torrent client)
       removeCacheOnDrop:
         type: boolean
       responsiveMode:
@@ -325,6 +335,24 @@ definitions:
     - CategoryDefault
     - CategoryManual
     - CategoryAll
+  settings.RemoteDownloaderConfig:
+    properties:
+      downloadDir:
+        description: empty = the client's default download dir
+        type: string
+      password:
+        description: optional HTTP Basic password
+        type: string
+      type:
+        description: client type, only "transmission" for now
+        type: string
+      url:
+        description: RPC URL, e.g. http://nas:9091/transmission/rpc
+        type: string
+      username:
+        description: optional HTTP Basic user
+        type: string
+    type: object
   settings.TMDBConfig:
     properties:
       apikey:
@@ -1132,7 +1160,10 @@ paths:
       - application/json
       description: Allow to get or set server settings.
       parameters:
-      - description: 'Settings request. Available params for action: get, set, def'
+      - description: 'Settings request. Available params for action: get, set, def,
+          test_remote. test_remote checks the remote downloader in remote_downloader
+          (or the saved one) and returns remotedl.SessionInfo; 400 on bad config,
+          502 when the client fails.'
         in: body
         name: request
         required: true

@@ -33,6 +33,19 @@ type TMDBConfig struct {
 	ImageURLRu string // Image URL for Russian users (default: https://imagetmdb.com)
 }
 
+// RemoteDownloaderConfig selects the LAN torrent client that predownloads
+// flagged torrents. An empty URL disables it.
+type RemoteDownloaderConfig struct {
+	Type        string // client type, only "transmission" for now
+	URL         string // RPC URL, e.g. http://nas:9091/transmission/rpc
+	Username    string // optional HTTP Basic user
+	Password    string // optional HTTP Basic password
+	DownloadDir string // empty = the client's default download dir
+}
+
+// DefaultRemoteDownloaderType is the client type used when none is set.
+const DefaultRemoteDownloaderType = "transmission"
+
 type BTSets struct {
 	// Cache
 	CacheSize       int64 // in byte, def 64 MB
@@ -68,6 +81,9 @@ type BTSets struct {
 
 	// TMDB
 	TMDBSettings TMDBConfig
+
+	// Remote downloader (LAN torrent client)
+	RemoteDownloader RemoteDownloaderConfig
 
 	// BT Config
 	EnableIPv6        bool
@@ -108,8 +124,14 @@ type BTSets struct {
 	MergeAllM3U bool // merge all torrents files into a single all.m3u playlist
 }
 
+// String is what log calls print (e.g. "Client config:" in torr/btserver.go).
+// The remote downloader password is masked; settings get still returns it.
 func (v *BTSets) String() string {
-	buf, _ := json.Marshal(v)
+	c := *v
+	if c.RemoteDownloader.Password != "" {
+		c.RemoteDownloader.Password = "***"
+	}
+	buf, _ := json.Marshal(&c)
 	return string(buf)
 }
 
@@ -167,6 +189,10 @@ func SetBTSets(sets *BTSets) {
 		sets.PreloadCache = 100
 	}
 
+	if sets.RemoteDownloader.Type == "" {
+		sets.RemoteDownloader.Type = DefaultRemoteDownloaderType
+	}
+
 	if sets.TorrentsSavePath == "" {
 		sets.UseDisk = false
 	} else if sets.UseDisk {
@@ -221,6 +247,7 @@ func SetDefaultConfig() {
 		ImageURL:   "https://image.tmdb.org",
 		ImageURLRu: "https://imagetmdb.com",
 	}
+	sets.RemoteDownloader = RemoteDownloaderConfig{Type: DefaultRemoteDownloaderType}
 	BTsets = sets
 	if !ReadOnly {
 		buf, err := json.Marshal(BTsets)
@@ -248,6 +275,10 @@ func loadBTSets() {
 					ImageURL:   "https://image.tmdb.org",
 					ImageURLRu: "https://imagetmdb.com",
 				}
+			}
+			// Configs that predate the remote downloader get the default type.
+			if BTsets.RemoteDownloader.Type == "" {
+				BTsets.RemoteDownloader.Type = DefaultRemoteDownloaderType
 			}
 			// Default Bonjour on for configs that predate the setting.
 			var raw map[string]json.RawMessage

@@ -836,7 +836,7 @@ const docTemplate = `{
                 "summary": "Get / Set server settings",
                 "parameters": [
                     {
-                        "description": "Settings request. Available params for action: get, set, def",
+                        "description": "Settings request. Available params for action: get, set, def, test_remote. test_remote checks the remote downloader in remote_downloader (or the saved one) and returns remotedl.SessionInfo; 400 on bad config, 502 when the client fails.",
                         "name": "request",
                         "in": "body",
                         "required": true,
@@ -1937,6 +1937,14 @@ const docTemplate = `{
                 "action": {
                     "type": "string"
                 },
+                "remote_downloader": {
+                    "description": "RemoteDownloader is an optional unsaved config for test_remote; the\nsaved one is tested when it is absent.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/settings.RemoteDownloaderConfig"
+                        }
+                    ]
+                },
                 "sets": {
                     "$ref": "#/definitions/settings.BTSets"
                 }
@@ -2183,6 +2191,14 @@ const docTemplate = `{
                     "description": "in percent, 5%-100%, [...S__X__E...] [S-E] not clean",
                     "type": "integer"
                 },
+                "remoteDownloader": {
+                    "description": "Remote downloader (LAN torrent client)",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/settings.RemoteDownloaderConfig"
+                        }
+                    ]
+                },
                 "removeCacheOnDrop": {
                     "type": "boolean"
                 },
@@ -2266,6 +2282,31 @@ const docTemplate = `{
                 "CategoryManual",
                 "CategoryAll"
             ]
+        },
+        "settings.RemoteDownloaderConfig": {
+            "type": "object",
+            "properties": {
+                "downloadDir": {
+                    "description": "empty = the client's default download dir",
+                    "type": "string"
+                },
+                "password": {
+                    "description": "optional HTTP Basic password",
+                    "type": "string"
+                },
+                "type": {
+                    "description": "client type, only \"transmission\" for now",
+                    "type": "string"
+                },
+                "url": {
+                    "description": "RPC URL, e.g. http://nas:9091/transmission/rpc",
+                    "type": "string"
+                },
+                "username": {
+                    "description": "optional HTTP Basic user",
+                    "type": "string"
+                }
+            }
         },
         "settings.TMDBConfig": {
             "type": "object",
