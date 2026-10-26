@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"server/log"
@@ -41,6 +42,10 @@ type transmission struct {
 
 	mu        sync.Mutex
 	sessionID string // last X-Transmission-Session-Id the daemon handed out
+
+	// lpdWarned: the lpd-enabled=false warning is logged once per client,
+	// i.e. once per config for the shared one that refreshes the peer port
+	lpdWarned atomic.Bool
 }
 
 func newTransmission(rpcURL, username, password string) *transmission {
@@ -81,7 +86,7 @@ func (t *transmission) Session(ctx context.Context) (SessionInfo, error) {
 		PeerPort:   args.PeerPort,
 		LPDEnabled: args.LPDEnabled,
 	}
-	if !info.LPDEnabled {
+	if !info.LPDEnabled && t.lpdWarned.CompareAndSwap(false, true) {
 		log.TLogln("remotedl: warning: Transmission reports lpd-enabled=false; enable it in settings.json so TorrServer finds the NAS via LPD, url:", t.url)
 	}
 	return info, nil

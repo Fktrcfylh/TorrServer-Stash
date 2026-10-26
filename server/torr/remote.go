@@ -151,6 +151,9 @@ func SetTorrentRemote(hashHex string, on bool) (*Torrent, error) {
 	row.RemoteDownload = on
 	if loaded != nil {
 		loaded.setRemoteDownload(on)
+		if on {
+			loaded.addRemotePeer()
+		}
 	}
 	return remoteResult(loaded, row), nil
 }

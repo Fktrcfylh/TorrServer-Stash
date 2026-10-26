@@ -36,6 +36,8 @@ type Torrent struct {
 	// RemoteDownload mirrors the DB row's flag for Status; guarded by
 	// muTorrent. Decisions read the row, not this copy.
 	RemoteDownload bool
+	// remotePeerAt is when the NAS peer was last added; guarded by muTorrent.
+	remotePeerAt time.Time
 
 	*torrent.Torrent
 	muTorrent sync.Mutex
@@ -272,9 +274,13 @@ func (t *Torrent) progressEvent() {
 		t.DownloadSpeed = 0
 		t.UploadSpeed = 0
 	}
+	flagged := t.RemoteDownload
 	t.muTorrent.Unlock()
 
 	t.lastTimeSpeed = time.Now()
+	if flagged {
+		t.readdRemotePeer()
+	}
 	t.updateRA()
 }
 

@@ -1,13 +1,16 @@
 package remotedl
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	stdlog "log"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -477,5 +480,54 @@ func TestSessionConcurrentRehandshake(t *testing.T) {
 		for err := range errs {
 			t.Errorf("round %d: %v", round, err)
 		}
+	}
+}
+
+// The lpd-enabled=false warning is logged once per client, not on every
+// session-get (the shared client refreshes the NAS peer port periodically).
+func TestSessionWarnsLPDOffOncePerClient(t *testing.T) {
+	var buf bytes.Buffer
+	stdlog.SetOutput(&buf)
+	t.Cleanup(func() { stdlog.SetOutput(os.Stderr) })
+
+	count := func() int { return strings.Count(buf.String(), "lpd-enabled=false") }
+	c := newFake(t, &fakeTransmission{})
+	for range 3 {
+		if _, err := c.Session(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := count(); n != 1 {
+		t.Fatalf("warnings = %d, want 1 for one client", n)
+	}
+	if _, err := newFake(t, &fakeTransmission{}).Session(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(); n != 2 {
+		t.Fatalf("warnings = %d, want 2 after a new client", n)
+	}
+}
+
+// A client that first reports LPD on still warns when it later reports off.
+func TestSessionWarnsLPDOffAfterOn(t *testing.T) {
+	var buf bytes.Buffer
+	stdlog.SetOutput(&buf)
+	t.Cleanup(func() { stdlog.SetOutput(os.Stderr) })
+
+	var lpd atomic.Bool
+	lpd.Store(true)
+	f := &fakeTransmission{reply: func(w http.ResponseWriter, _ []byte) {
+		fmt.Fprintf(w, `{"result":"success","arguments":{"version":"2.82","rpc-version":15,"peer-port":51413,"lpd-enabled":%t}}`, lpd.Load())
+	}}
+	c := newFake(t, f)
+	if _, err := c.Session(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	lpd.Store(false)
+	if _, err := c.Session(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(buf.String(), "lpd-enabled=false"); n != 1 {
+		t.Fatalf("warnings = %d, want 1", n)
 	}
 }

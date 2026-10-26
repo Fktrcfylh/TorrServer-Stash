@@ -2,6 +2,7 @@ package torr
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -76,6 +77,10 @@ func withRemote(t *testing.T) *fakeRemote {
 	old := retrackers
 	retrackers = func() []string { return []string{retracker} }
 	t.Cleanup(func() { retrackers = old })
+	// keep session-get of the NAS peer cache out of the recorded calls
+	lockedPeerSeams(t, func(context.Context, settings.RemoteDownloaderConfig) (torrent.Peer, error) {
+		return torrent.Peer{}, errors.New("no NAS peer in this test")
+	}, nil)
 	return f
 }
 

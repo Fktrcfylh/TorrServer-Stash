@@ -37,13 +37,14 @@ func LoadTorrent(tor *Torrent) *Torrent {
 	if err != nil {
 		return nil
 	}
+	// before WaitInfo: a flagged torrent gets the NAS peer while it waits
+	tr.setRemoteDownload(tor.remoteDownload())
 	if !tr.WaitInfo() {
 		return nil
 	}
 	tr.Title = tor.Title
 	tr.Poster = tor.Poster
 	tr.Data = tor.Data
-	tr.setRemoteDownload(tor.remoteDownload())
 	return tr
 }
 
