@@ -1,5 +1,5 @@
-// Package remotedl talks to a torrent client on the LAN (Transmission on a
-// NAS) that predownloads torrents flagged in TorrServer.
+// Package remotedl talks to a torrent client on the LAN (Transmission or
+// qBittorrent, e.g. on a NAS) that predownloads torrents flagged in TorrServer.
 package remotedl
 
 import (
@@ -68,7 +68,8 @@ type RemoteStatus struct {
 
 // Downloader is a remote torrent client.
 type Downloader interface {
-	// Session returns the client's version, RPC version, peer port and LPD flag.
+	// Session returns the client's version, RPC version (0 when the client
+	// has none), peer port and LPD flag.
 	Session(ctx context.Context) (SessionInfo, error)
 	// Add adds a whole torrent; a torrent the client already has is a success.
 	Add(ctx context.Context, req AddRequest) (AddResult, error)
@@ -130,6 +131,8 @@ func New(cfg settings.RemoteDownloaderConfig) (Downloader, error) {
 	switch cfg.Type {
 	case settings.DefaultRemoteDownloaderType:
 		return newTransmission(u.String(), cfg.Username, cfg.Password), nil
+	case qbittorrentType:
+		return newQbittorrent(u.String(), cfg.Username, cfg.Password), nil
 	default:
 		return nil, fmt.Errorf("unknown remote downloader type %q", cfg.Type)
 	}

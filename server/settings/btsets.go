@@ -36,10 +36,10 @@ type TMDBConfig struct {
 // RemoteDownloaderConfig selects the LAN torrent client that predownloads
 // flagged torrents. An empty URL disables it.
 type RemoteDownloaderConfig struct {
-	Type        string // client type, only "transmission" for now
-	URL         string // RPC URL, e.g. http://nas:9091/transmission/rpc
-	Username    string // optional HTTP Basic user
-	Password    string // optional HTTP Basic password
+	Type        string // client type: "transmission" or "qbittorrent"
+	URL         string // Transmission RPC URL (http://nas:9091/transmission/rpc) or qBittorrent Web UI URL (http://nas:8080)
+	Username    string // optional user (Transmission HTTP Basic, qBittorrent Web UI login)
+	Password    string // optional password
 	DownloadDir string // empty = the client's default download dir
 }
 

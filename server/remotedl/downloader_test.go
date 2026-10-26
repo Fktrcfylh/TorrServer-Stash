@@ -36,8 +36,22 @@ func TestNewTransmission(t *testing.T) {
 	}
 }
 
+func TestNewQbittorrent(t *testing.T) {
+	d, err := New(settings.RemoteDownloaderConfig{Type: "qbittorrent", URL: " http://127.0.0.1:8080/ ", Username: "u", Password: "p"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	qb, ok := d.(*qbittorrent)
+	if !ok {
+		t.Fatalf("got %T, want *qbittorrent", d)
+	}
+	if qb.base != "http://127.0.0.1:8080" || qb.username != "u" || qb.password != "p" || qb.http.Jar == nil {
+		t.Fatalf("client = %+v", qb)
+	}
+}
+
 func TestNewUnknownType(t *testing.T) {
-	for _, typ := range []string{"qbittorrent", ""} {
+	for _, typ := range []string{"deluge", "qBittorrent", ""} {
 		_, err := New(settings.RemoteDownloaderConfig{Type: typ, URL: "http://nas:9091/transmission/rpc"})
 		if err == nil || !strings.Contains(err.Error(), "unknown remote downloader type") {
 			t.Fatalf("type %q: err = %v", typ, err)

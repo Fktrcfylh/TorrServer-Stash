@@ -2336,19 +2336,19 @@
                     "type": "string"
                 },
                 "password": {
-                    "description": "optional HTTP Basic password",
+                    "description": "optional password",
                     "type": "string"
                 },
                 "type": {
-                    "description": "client type, only \"transmission\" for now",
+                    "description": "client type: \"transmission\" or \"qbittorrent\"",
                     "type": "string"
                 },
                 "url": {
-                    "description": "RPC URL, e.g. http://nas:9091/transmission/rpc",
+                    "description": "Transmission RPC URL (http://nas:9091/transmission/rpc) or qBittorrent Web UI URL (http://nas:8080)",
                     "type": "string"
                 },
                 "username": {
-                    "description": "optional HTTP Basic user",
+                    "description": "optional user (Transmission HTTP Basic, qBittorrent Web UI login)",
                     "type": "string"
                 }
             }

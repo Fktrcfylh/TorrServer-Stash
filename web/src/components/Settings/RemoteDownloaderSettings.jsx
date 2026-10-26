@@ -6,7 +6,25 @@ import { settingsHost } from 'utils/Hosts'
 
 import { SecondarySettingsContent, SettingSectionLabel, SettingsStatusMessage } from './style'
 
-const remoteTypes = [{ value: 'transmission', label: 'Transmission' }]
+// per type: URL placeholder and the locale keys whose wording differs
+const remoteTypes = [
+  {
+    value: 'transmission',
+    label: 'Transmission',
+    placeholder: 'http://nas:9091/transmission/rpc',
+    urlHint: 'Remote.URLHint',
+    testOk: 'Remote.TestOk',
+    lpdOff: 'Remote.LpdOff',
+  },
+  {
+    value: 'qbittorrent',
+    label: 'qBittorrent',
+    placeholder: 'http://nas:8080',
+    urlHint: 'Remote.URLHintQbittorrent',
+    testOk: 'Remote.TestOkQbittorrent',
+    lpdOff: 'Remote.LpdOffQbittorrent',
+  },
+]
 
 export default function RemoteDownloaderSettings({ settings, updateSettings }) {
   const { t } = useTranslation()
@@ -17,6 +35,7 @@ export default function RemoteDownloaderSettings({ settings, updateSettings }) {
   const { RemoteDownloader } = settings || {}
   const { Type = 'transmission', URL = '', Username = '', Password = '', DownloadDir = '' } = RemoteDownloader || {}
   const config = { Type, URL, Username, Password, DownloadDir }
+  const typeInfo = remoteTypes.find(({ value }) => value === Type) || remoteTypes[0]
   const configKey = JSON.stringify(config)
   const shownTest = test?.config === configKey ? test : null
   const testResult = shownTest?.result
@@ -68,10 +87,10 @@ export default function RemoteDownloaderSettings({ settings, updateSettings }) {
 
       <TextField
         label={t('Remote.URL')}
-        helperText={t('Remote.URLHint')}
+        helperText={t(typeInfo.urlHint)}
         value={URL}
         onChange={e => handleChange('URL', e.target.value)}
-        placeholder='http://nas:9091/transmission/rpc'
+        placeholder={typeInfo.placeholder}
         type='url'
         variant='outlined'
         size='small'
@@ -123,14 +142,14 @@ export default function RemoteDownloaderSettings({ settings, updateSettings }) {
       {testResult && (
         <>
           <SettingsStatusMessage severity='success'>
-            {t('Remote.TestOk', {
+            {t(typeInfo.testOk, {
               version: testResult.version,
               rpcVersion: testResult.rpc_version,
               peerPort: testResult.peer_port,
             })}
           </SettingsStatusMessage>
           <SettingsStatusMessage severity={testResult.lpd_enabled ? 'info' : 'warning'}>
-            {testResult.lpd_enabled ? t('Remote.LpdOn') : t('Remote.LpdOff')}
+            {testResult.lpd_enabled ? t('Remote.LpdOn') : t(typeInfo.lpdOff)}
           </SettingsStatusMessage>
         </>
       )}

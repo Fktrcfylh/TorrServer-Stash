@@ -4,19 +4,20 @@
 
 ## What the fork adds: predownload to a NAS
 
-TorrServer can hand a torrent to a Transmission daemon on your LAN (a NAS), which downloads it in full.
-While you watch, TorrServer gets data from the NAS over the LAN, so playback depends less on how fast
-internet peers are right now. Only Transmission is supported. Tested with Transmission 2.82 (RPC 15).
+TorrServer can hand a torrent to a Transmission or qBittorrent client on your LAN (a NAS), which downloads it
+in full. While you watch, TorrServer gets data from the NAS over the LAN, so playback depends less on how fast
+internet peers are right now. Tested with Transmission 2.82 (RPC 15) and qBittorrent 4.5.0 (Web API 2.8.18).
 
 ### Setup
 
 1. **Settings → NAS.** Fill in:
-   - **Client type**: `transmission`.
-   - **RPC URL**, e.g. `http://192.168.0.10:9091/transmission/rpc`. An empty URL disables the feature.
-   - **Username** / **Password** if Transmission RPC uses auth.
-   - **Download directory** on the NAS. Empty uses the Transmission default.
-2. Press **Test connection**. It tests the values in the form without saving them and shows the Transmission
-   version, RPC version, peer port and whether LPD is on. Then **Save** (this restarts the torrent client).
+   - **Client type**: `Transmission` or `qBittorrent`.
+   - **RPC URL**: for Transmission e.g. `http://192.168.0.10:9091/transmission/rpc`, for qBittorrent the Web UI
+     address, e.g. `http://192.168.0.10:8080`. An empty URL disables the feature.
+   - **Username** / **Password** if the client asks for a login (Transmission RPC auth, qBittorrent Web UI login).
+   - **Download directory** on the NAS. Empty uses the client's default.
+2. Press **Test connection**. It tests the values in the form without saving them and shows the client
+   version, RPC version (Transmission only), peer port and whether LPD is on. Then **Save** (this restarts the torrent client).
    The same check over the API: `POST /settings {"action":"test_remote","remote_downloader":{...}}`.
 3. Open a torrent's details and tick **Download the whole torrent to the NAS**. The torrent card shows a
    `NAS <progress>%` badge, and the `/torrents` status JSON carries `remote_download`, `remote_state`,
@@ -37,20 +38,36 @@ internet peers are right now. Only Transmission is supported. Tested with Transm
   To roll back, set `lpd-enabled` to `false` the same way.
 - **`rpc-whitelist`** must allow the TorrServer host (or set `rpc-whitelist-enabled` to `false`).
   Otherwise RPC answers 403.
+
+### qBittorrent requirements
+
+- **Turn on the Web UI**: **Tools → Options** (macOS: **qBittorrent → Preferences**) **→ Web UI → Web User
+  Interface (Remote control)**. Its address and
+  port (8080 by default) form the URL.
+- **Login.** Enter the Web UI user and password in TorrServer, or tick **Bypass authentication for clients on
+  localhost** / **for clients in whitelisted IP subnets** and leave them empty. Wrong credentials are tried once
+  until you change the settings: qBittorrent bans an IP after 5 failed logins (for an hour by default).
+- **Turn on Local Peer Discovery**: **Tools → Options → BitTorrent → Enable Local Peer Discovery to find more
+  peers**. Required for the same reason as Transmission's `lpd-enabled`.
+- If the Web UI sits behind a reverse proxy, the URL may carry a path (`http://host/qbittorrent`); TorrServer
+  appends `/api/v2/...` to it.
+
+### Both clients
+
 - **Keep LPD on in TorrServer too** (**Settings → Additional → LPD (Local Peer Discovery)**, on by default).
 - **Same network segment.** LPD uses multicast, so TorrServer and the NAS must be on the same L2 segment.
   A Docker bridge network blocks it. Run TorrServer with host networking.
 
 ### What to expect
 
-- **Tick ahead of watching.** While Transmission is still downloading a busy public torrent, it chokes peers
+- **Tick ahead of watching.** While the client is still downloading a busy public torrent, it chokes peers
   that do not upload to it, and TorrServer gets little from it. Data flows best once the NAS is seeding.
   Even then the NAS is one peer among many: TorrServer spreads requests across all connected peers.
-- **Download queue.** Transmission queues torrents beyond its download queue size (5 by default). A queued
+- **Download queue.** Transmission and qBittorrent queue torrents beyond their download queue size (5 by default; in qBittorrent only with **Torrent Queueing** on). A queued
   torrent accepts no peers, so it does not help playback until it starts.
 - **Proxy.** With `--proxymode full` or `peers`, TorrServer dials the NAS through the proxy too, which may not reach the LAN. Use the default `tracker` mode.
 - **Unticking deletes data on the NAS.** Unticking, or removing a flagged torrent from TorrServer, removes the
-  torrent from Transmission together with its downloaded data. If the torrent was already in Transmission
+  torrent from the client together with its downloaded data. If the torrent was already in the client
   before you ticked it, TorrServer treats it as its own and removes it too.
 - **Unflagging needs a configured NAS.** If you clear the RPC URL while torrents are still flagged, unticking or
   removing them fails with an error and the torrent stays. Set the NAS back up first, or untick before clearing it.

@@ -107,6 +107,35 @@ func TestTestRemoteBodyConfigOverridesSaved(t *testing.T) {
 	}
 }
 
+// test_remote with the qBittorrent type reads app/version and app/preferences.
+func TestTestRemoteQbittorrent(t *testing.T) {
+	var paths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		switch r.URL.Path {
+		case "/api/v2/app/version":
+			io.WriteString(w, "v4.5.0")
+		case "/api/v2/app/preferences":
+			io.WriteString(w, `{"listen_port":52255,"lsd":true}`)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	withSavedRemote(t, sets.RemoteDownloaderConfig{Type: "transmission"})
+
+	w := postSettings(t, `{"action":"test_remote","remote_downloader":{"Type":"qbittorrent","URL":"`+srv.URL+`"}}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", w.Code, w.Body.String())
+	}
+	if want := `{"version":"v4.5.0","rpc_version":0,"peer_port":52255,"lpd_enabled":true}`; w.Body.String() != want {
+		t.Fatalf("body = %s, want %s", w.Body.String(), want)
+	}
+	if strings.Join(paths, ",") != "/api/v2/app/version,/api/v2/app/preferences" {
+		t.Fatalf("paths = %v", paths)
+	}
+}
+
 func TestTestRemoteDisabled(t *testing.T) {
 	withSavedRemote(t, sets.RemoteDownloaderConfig{Type: "transmission"})
 	w := postSettings(t, `{"action":"test_remote"}`)
@@ -123,11 +152,11 @@ func TestTestRemoteBadBodyConfig(t *testing.T) {
 	srv := fakeRemote(t, &n)
 	// A valid saved config must not be used when the body carries a bad one.
 	withSavedRemote(t, sets.RemoteDownloaderConfig{Type: "transmission", URL: srv.URL})
-	w := postSettings(t, `{"action":"test_remote","remote_downloader":{"Type":"qbittorrent","URL":"http://nas:8080"}}`)
+	w := postSettings(t, `{"action":"test_remote","remote_downloader":{"Type":"deluge","URL":"http://nas:8112"}}`)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", w.Code)
 	}
-	if msg := errorBody(t, w); !strings.Contains(msg, "qbittorrent") {
+	if msg := errorBody(t, w); !strings.Contains(msg, "deluge") {
 		t.Fatalf("error = %q", msg)
 	}
 	if n.Load() != 0 {
