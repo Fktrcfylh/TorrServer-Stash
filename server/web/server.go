@@ -61,7 +61,6 @@ func Start() error {
 		log.TLogln("BTS.Connect() error!", err)
 		return err
 	}
-	torr.StartResumePinned()
 	rutor.Start()
 
 	gin.SetMode(gin.ReleaseMode)
@@ -165,7 +164,6 @@ func Stop() {
 	bonjour.Stop()
 	// Unmount FUSE filesystem if mounted
 	fuse.FuseCleanup()
-	torr.StopResumePinned()
 	BTS.Disconnect()
 	waitChan <- nil
 }

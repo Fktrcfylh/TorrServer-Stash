@@ -39,14 +39,14 @@ func testHash(b byte) metainfo.Hash {
 
 // cacheDirs holds the dirs created for one cleanCache run.
 type cacheDirs struct {
-	pinned   string
-	unpinned string
-	notInDB  string
-	notHash  string
+	inDB1   string
+	inDB2   string
+	notInDB string
+	notHash string
 }
 
-// withCacheDirs sets a disk BTsets with a temp save path, stores a pinned and
-// an unpinned DB row and creates their dirs plus a non-DB hash dir and a dir
+// withCacheDirs sets a disk BTsets with a temp save path, stores two DB rows
+// and creates their dirs plus a non-DB hash dir and a dir
 // whose name is not a hash. Globals and the torrents table are restored.
 func withCacheDirs(t *testing.T, removeCacheOnDrop bool) cacheDirs {
 	t.Helper()
@@ -62,15 +62,14 @@ func withCacheDirs(t *testing.T, removeCacheOnDrop bool) cacheDirs {
 	for _, h := range []metainfo.Hash{testHash(1), testHash(2)} {
 		settings.AddTorrent(&settings.TorrentDB{TorrentSpec: &torrent.TorrentSpec{InfoHash: h}})
 	}
-	settings.SetTorrentPin(testHash(1), settings.PinModeAll, 0)
 
 	dirs := cacheDirs{
-		pinned:   testHash(1).HexString(),
-		unpinned: testHash(2).HexString(),
-		notInDB:  testHash(3).HexString(),
-		notHash:  "not-a-hash",
+		inDB1:   testHash(1).HexString(),
+		inDB2:   testHash(2).HexString(),
+		notInDB: testHash(3).HexString(),
+		notHash: "not-a-hash",
 	}
-	for _, name := range []string{dirs.pinned, dirs.unpinned, dirs.notInDB, dirs.notHash} {
+	for _, name := range []string{dirs.inDB1, dirs.inDB2, dirs.notInDB, dirs.notHash} {
 		dir := filepath.Join(settings.BTsets.TorrentsSavePath, name)
 		if err := os.MkdirAll(dir, 0o777); err != nil {
 			t.Fatal(err)
@@ -93,13 +92,13 @@ func assertCacheDir(t *testing.T, name string, want bool) {
 	}
 }
 
-func TestCleanCacheRemoveCacheOnDropKeepsPinned(t *testing.T) {
+func TestCleanCacheRemoveCacheOnDropRemovesHashDirs(t *testing.T) {
 	dirs := withCacheDirs(t, true)
 
 	cleanCache()
 
-	assertCacheDir(t, dirs.pinned, true)
-	assertCacheDir(t, dirs.unpinned, false)
+	assertCacheDir(t, dirs.inDB1, false)
+	assertCacheDir(t, dirs.inDB2, false)
 	assertCacheDir(t, dirs.notInDB, false)
 	assertCacheDir(t, dirs.notHash, true)
 }
@@ -109,8 +108,8 @@ func TestCleanCacheKeepsDBTorrents(t *testing.T) {
 
 	cleanCache()
 
-	assertCacheDir(t, dirs.pinned, true)
-	assertCacheDir(t, dirs.unpinned, true)
+	assertCacheDir(t, dirs.inDB1, true)
+	assertCacheDir(t, dirs.inDB2, true)
 	assertCacheDir(t, dirs.notInDB, false)
 	assertCacheDir(t, dirs.notHash, true)
 }
@@ -121,7 +120,7 @@ func TestCleanCacheWithoutDiskRemovesNothing(t *testing.T) {
 
 	cleanCache()
 
-	for _, name := range []string{dirs.pinned, dirs.unpinned, dirs.notInDB, dirs.notHash} {
+	for _, name := range []string{dirs.inDB1, dirs.inDB2, dirs.notInDB, dirs.notHash} {
 		assertCacheDir(t, name, true)
 	}
 }

@@ -44,7 +44,6 @@ import {
 } from 'utils/GStreamer'
 
 import {
-  PinBadge,
   StatusIndicators,
   StyledButton,
   TorrentCard,
@@ -140,14 +139,7 @@ const sameFileList = (left, right) => {
     leftFiles.length === rightFiles.length &&
     leftFiles.every((file, index) => {
       const other = rightFiles[index]
-      return (
-        file.id === other?.id &&
-        file.path === other.path &&
-        file.length === other.length &&
-        file.pinned === other.pinned &&
-        file.completed === other.completed &&
-        file.downloaded === other.downloaded
-      )
+      return file.id === other?.id && file.path === other.path && file.length === other.length
     })
   )
 }
@@ -200,12 +192,7 @@ const Torrent = ({ torrent }) => {
     stat,
     data,
     file_stats: torrentFileList,
-    pin_mode: pinMode,
-    pin_progress: pinProgress,
-    pin_error: pinError,
   } = torrent
-  const isPinned = pinMode === 'all' || pinMode === 'next'
-  const isPinNoSpace = pinError === 'no_space' && (pinProgress || 0) < 100
 
   const dropTorrent = () => axios.post(torrentsHost(), { action: 'drop', hash })
   const deleteTorrent = () => axios.post(torrentsHost(), { action: 'rem', hash })
@@ -538,11 +525,6 @@ const Torrent = ({ torrent }) => {
           <div className='description-title-wrapper'>
             <div className='description-section-name'>
               {category ? (catIndex >= 0 ? t(catArray.name) : category) : t('Name')}
-              {isPinned && (
-                <PinBadge isError={isPinNoSpace} title={isPinNoSpace ? t('Pin.NoSpace') : t('Pin.Title')}>
-                  {isPinNoSpace ? t('Pin.NoSpaceShort') : t('Pin.Badge', { progress: pinProgress || 0 })}
-                </PinBadge>
-              )}
             </div>
             <div className='description-torrent-title'>{parsedTitle}</div>
           </div>
@@ -657,10 +639,6 @@ export default memo(Torrent, (prev, next) => {
     p.torrent_size === n.torrent_size &&
     p.download_speed === n.download_speed &&
     p.data === n.data &&
-    p.pin_mode === n.pin_mode &&
-    p.pin_next === n.pin_next &&
-    p.pin_progress === n.pin_progress &&
-    p.pin_error === n.pin_error &&
     sameFileList(p.file_stats, n.file_stats)
   )
 })

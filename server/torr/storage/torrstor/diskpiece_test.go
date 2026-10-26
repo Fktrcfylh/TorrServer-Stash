@@ -18,8 +18,8 @@ func openWithPieceFiles(t *testing.T, sizes map[int]int) *Cache {
 	withDiskSettings(t)
 	info := &metainfo.Info{
 		Name:        "short-last",
-		PieceLength: pinTestPieceLength,
-		Length:      2*pinTestPieceLength + pinTestPieceLength/2,
+		PieceLength: testPieceLength,
+		Length:      2*testPieceLength + testPieceLength/2,
 		Pieces:      make([]byte, 20*3),
 	}
 	var hash metainfo.Hash
@@ -50,17 +50,17 @@ func assertComplete(t *testing.T, c *Cache, id int, size int64, complete bool) {
 }
 
 func TestNewDiskPieceFullFilesComplete(t *testing.T) {
-	c := openWithPieceFiles(t, map[int]int{0: pinTestPieceLength, 2: pinTestPieceLength / 2})
+	c := openWithPieceFiles(t, map[int]int{0: testPieceLength, 2: testPieceLength / 2})
 
-	assertComplete(t, c, 0, pinTestPieceLength, true)
+	assertComplete(t, c, 0, testPieceLength, true)
 	assertComplete(t, c, 1, 0, false)
 	// the last piece is complete at its real length, not the piece length
-	assertComplete(t, c, 2, pinTestPieceLength/2, true)
+	assertComplete(t, c, 2, testPieceLength/2, true)
 }
 
 func TestNewDiskPieceShortFilesIncomplete(t *testing.T) {
-	c := openWithPieceFiles(t, map[int]int{0: pinTestPieceLength - 1, 2: pinTestPieceLength/2 - 1})
+	c := openWithPieceFiles(t, map[int]int{0: testPieceLength - 1, 2: testPieceLength/2 - 1})
 
-	assertComplete(t, c, 0, pinTestPieceLength-1, false)
-	assertComplete(t, c, 2, pinTestPieceLength/2-1, false)
+	assertComplete(t, c, 0, testPieceLength-1, false)
+	assertComplete(t, c, 2, testPieceLength/2-1, false)
 }
