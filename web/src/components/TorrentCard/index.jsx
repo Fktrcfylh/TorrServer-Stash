@@ -16,6 +16,8 @@ import {
   Button,
   CircularProgress,
   DialogActions,
+  DialogContent,
+  DialogContentText,
   DialogTitle,
   ListItemIcon,
   ListItemText,
@@ -45,6 +47,7 @@ import {
 import { externalLink, useExternalMediaBase } from 'utils/MediaBase'
 
 import {
+  RemoteBadge,
   StatusIndicators,
   StyledButton,
   TorrentCard,
@@ -133,6 +136,8 @@ const audioCodecName = track => {
   }
 }
 
+const remoteBadgeColors = { error: '#E57373', missing: '#E57373', seeding: '#4CAF50' }
+
 const sameFileList = (left, right) => {
   const leftFiles = left || []
   const rightFiles = right || []
@@ -149,6 +154,8 @@ const Torrent = ({ torrent }) => {
   const { t } = useTranslation()
   const [isDetailedInfoOpened, setIsDetailedInfoOpened] = useState(false)
   const [isDeleteTorrentOpened, setIsDeleteTorrentOpened] = useState(false)
+  const [isDeletePending, setIsDeletePending] = useState(false)
+  const [deleteError, setDeleteError] = useState(null)
   const [unsupportedPlayers, setUnsupportedPlayers] = useState({})
   const [episodeMenuAnchor, setEpisodeMenuAnchor] = useState(null)
   const [selectedPlayer, setSelectedPlayer] = useState(null)
@@ -180,7 +187,10 @@ const Torrent = ({ torrent }) => {
 
   const openDetailedInfo = () => setIsDetailedInfoOpened(true)
   const closeDetailedInfo = () => setIsDetailedInfoOpened(false)
-  const openDeleteTorrentAlert = () => setIsDeleteTorrentOpened(true)
+  const openDeleteTorrentAlert = () => {
+    setDeleteError(null)
+    setIsDeleteTorrentOpened(true)
+  }
   const closeDeleteTorrentAlert = () => setIsDeleteTorrentOpened(false)
 
   const {
@@ -194,10 +204,37 @@ const Torrent = ({ torrent }) => {
     stat,
     data,
     file_stats: torrentFileList,
+    remote_download: remoteDownload,
+    remote_state: remoteState,
+    remote_progress: remoteProgress,
+    remote_error: remoteError,
   } = torrent
 
   const dropTorrent = () => axios.post(torrentsHost(), { action: 'drop', hash })
-  const deleteTorrent = () => axios.post(torrentsHost(), { action: 'rem', hash })
+  // rem of a NAS-flagged torrent can fail (NAS unreachable): wait for it and keep the dialog open with the error.
+  // Unflagged torrents keep the previous fire-and-close flow.
+  const deleteTorrent = () => {
+    if (!remoteDownload) {
+      axios.post(torrentsHost(), { action: 'rem', hash })
+      closeDeleteTorrentAlert()
+      return
+    }
+    setDeleteError(null)
+    setIsDeletePending(true)
+    axios
+      .post(torrentsHost(), { action: 'rem', hash })
+      .then(() => {
+        if (isMounted.current) closeDeleteTorrentAlert()
+      })
+      .catch(error => {
+        if (isMounted.current) setDeleteError(error.response?.data?.error || error.message)
+      })
+      .finally(() => {
+        if (isMounted.current) setIsDeletePending(false)
+      })
+  }
+  const hasRemoteProgress = typeof remoteProgress === 'number'
+  const remoteStateLabel = t(`Remote.State.${remoteState || 'unknown'}`)
 
   const getParsedTitle = () => {
     const parse = key => ptt.parse(title || '')?.[key] || ptt.parse(name || '')?.[key]
@@ -527,6 +564,14 @@ const Torrent = ({ torrent }) => {
           <div className='description-title-wrapper'>
             <div className='description-section-name'>
               {category ? (catIndex >= 0 ? t(catArray.name) : category) : t('Name')}
+              {remoteDownload && (
+                <RemoteBadge
+                  $color={remoteBadgeColors[remoteState]}
+                  title={remoteError ? `${remoteStateLabel}: ${remoteError}` : remoteStateLabel}
+                >
+                  {hasRemoteProgress ? t('Remote.Badge', { progress: remoteProgress }) : t('Remote.BadgeShort')}
+                </RemoteBadge>
+              )}
             </div>
             <div className='description-torrent-title'>{parsedTitle}</div>
           </div>
@@ -567,22 +612,19 @@ const Torrent = ({ torrent }) => {
         <DialogTorrentDetailsContent closeDialog={closeDetailedInfo} torrent={torrent} />
       </StyledDialog>
 
-      <Dialog open={isDeleteTorrentOpened} onClose={closeDeleteTorrentAlert}>
+      <Dialog open={isDeleteTorrentOpened} onClose={() => !isDeletePending && closeDeleteTorrentAlert()}>
         <DialogTitle>{t('DeleteTorrent?')}</DialogTitle>
+        {deleteError && (
+          <DialogContent>
+            <DialogContentText color='error'>{deleteError}</DialogContentText>
+          </DialogContent>
+        )}
         <DialogActions>
-          <Button variant='outlined' onClick={closeDeleteTorrentAlert} color='secondary'>
+          <Button variant='outlined' onClick={closeDeleteTorrentAlert} disabled={isDeletePending} color='secondary'>
             {t('Cancel')}
           </Button>
 
-          <Button
-            variant='contained'
-            onClick={() => {
-              deleteTorrent(torrent)
-              closeDeleteTorrentAlert()
-            }}
-            color='secondary'
-            autoFocus
-          >
+          <Button variant='contained' onClick={deleteTorrent} disabled={isDeletePending} color='secondary' autoFocus>
             {t('OK')}
           </Button>
         </DialogActions>
@@ -641,6 +683,10 @@ export default memo(Torrent, (prev, next) => {
     p.torrent_size === n.torrent_size &&
     p.download_speed === n.download_speed &&
     p.data === n.data &&
+    p.remote_download === n.remote_download &&
+    p.remote_state === n.remote_state &&
+    p.remote_progress === n.remote_progress &&
+    p.remote_error === n.remote_error &&
     sameFileList(p.file_stats, n.file_stats)
   )
 })

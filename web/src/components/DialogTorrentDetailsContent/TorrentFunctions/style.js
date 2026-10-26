@@ -37,3 +37,14 @@ export const SmallLabel = styled.div`
     }
   `}
 `
+
+export const RemoteControls = styled.div`
+  margin: 10px 0 30px;
+
+  .remote-status {
+    display: grid;
+    gap: 6px;
+    max-width: 400px;
+    margin: 4px 0 8px;
+  }
+`
