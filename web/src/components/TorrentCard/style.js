@@ -268,9 +268,9 @@ export const StatusIndicators = styled.div`
   `}
 `
 
-export const PinBadge = styled.span`
+export const RemoteBadge = styled.span`
   ${({
-    isError,
+    $color,
     theme: {
       torrentCard: { accentCardColor },
     },
@@ -279,7 +279,7 @@ export const PinBadge = styled.span`
     margin-inline-start: 6px;
     padding: 0 4px;
     border-radius: 3px;
-    background: ${isError ? '#E57373' : accentCardColor};
+    background: ${$color || accentCardColor};
     color: #fff;
     white-space: nowrap;
   `}

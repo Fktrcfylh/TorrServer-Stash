@@ -33,6 +33,19 @@ type TMDBConfig struct {
 	ImageURLRu string // Image URL for Russian users (default: https://imagetmdb.com)
 }
 
+// RemoteDownloaderConfig selects the LAN torrent client that predownloads
+// flagged torrents. An empty URL disables it.
+type RemoteDownloaderConfig struct {
+	Type        string // client type: "transmission" or "qbittorrent"
+	URL         string // Transmission RPC URL (http://nas:9091/transmission/rpc) or qBittorrent Web UI URL (http://nas:8080)
+	Username    string // optional user (Transmission HTTP Basic, qBittorrent Web UI login)
+	Password    string // optional password
+	DownloadDir string // empty = the client's default download dir
+}
+
+// DefaultRemoteDownloaderType is the client type used when none is set.
+const DefaultRemoteDownloaderType = "transmission"
+
 type BTSets struct {
 	// Cache
 	CacheSize       int64 // in byte, def 64 MB
@@ -43,7 +56,6 @@ type BTSets struct {
 	UseDisk           bool
 	TorrentsSavePath  string
 	RemoveCacheOnDrop bool
-	DefaultPinNext    int // files to predownload for a "next" pin when the request omits N, def 3
 
 	// Torrent
 	ForceEncrypt             bool
@@ -69,6 +81,9 @@ type BTSets struct {
 
 	// TMDB
 	TMDBSettings TMDBConfig
+
+	// Remote downloader (LAN torrent client)
+	RemoteDownloader RemoteDownloaderConfig
 
 	// BT Config
 	EnableIPv6        bool
@@ -109,8 +124,14 @@ type BTSets struct {
 	MergeAllM3U bool // merge all torrents files into a single all.m3u playlist
 }
 
+// String is what log calls print (e.g. "Client config:" in torr/btserver.go).
+// The remote downloader password is masked; settings get still returns it.
 func (v *BTSets) String() string {
-	buf, _ := json.Marshal(v)
+	c := *v
+	if c.RemoteDownloader.Password != "" {
+		c.RemoteDownloader.Password = "***"
+	}
+	buf, _ := json.Marshal(&c)
 	return string(buf)
 }
 
@@ -161,15 +182,15 @@ func SetBTSets(sets *BTSets) {
 		sets.ReaderReadAHead = 100
 	}
 
-	if sets.DefaultPinNext <= 0 {
-		sets.DefaultPinNext = 3
-	}
-
 	if sets.PreloadCache < 0 {
 		sets.PreloadCache = 0
 	}
 	if sets.PreloadCache > 100 {
 		sets.PreloadCache = 100
+	}
+
+	if sets.RemoteDownloader.Type == "" {
+		sets.RemoteDownloader.Type = DefaultRemoteDownloaderType
 	}
 
 	if sets.TorrentsSavePath == "" {
@@ -206,7 +227,6 @@ func SetDefaultConfig() {
 	sets := new(BTSets)
 	sets.CacheSize = 64 * 1024 * 1024 // 64 MB
 	sets.PreloadCache = 50
-	sets.DefaultPinNext = 3
 	sets.ConnectionsLimit = 25
 	sets.RetrackersMode = 1
 	sets.TrackersListURL = ""
@@ -227,6 +247,7 @@ func SetDefaultConfig() {
 		ImageURL:   "https://image.tmdb.org",
 		ImageURLRu: "https://imagetmdb.com",
 	}
+	sets.RemoteDownloader = RemoteDownloaderConfig{Type: DefaultRemoteDownloaderType}
 	BTsets = sets
 	if !ReadOnly {
 		buf, err := json.Marshal(BTsets)
@@ -246,9 +267,6 @@ func loadBTSets() {
 			if BTsets.ReaderReadAHead < 5 {
 				BTsets.ReaderReadAHead = 5
 			}
-			if BTsets.DefaultPinNext <= 0 {
-				BTsets.DefaultPinNext = 3
-			}
 			// Set default TMDB settings if missing (for existing configs)
 			if BTsets.TMDBSettings.APIURL == "" {
 				BTsets.TMDBSettings = TMDBConfig{
@@ -257,6 +275,10 @@ func loadBTSets() {
 					ImageURL:   "https://image.tmdb.org",
 					ImageURLRu: "https://imagetmdb.com",
 				}
+			}
+			// Configs that predate the remote downloader get the default type.
+			if BTsets.RemoteDownloader.Type == "" {
+				BTsets.RemoteDownloader.Type = DefaultRemoteDownloaderType
 			}
 			// Default Bonjour on for configs that predate the setting.
 			var raw map[string]json.RawMessage

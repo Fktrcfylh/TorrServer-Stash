@@ -435,7 +435,9 @@ func removeTorrent(ctx context.Context, req *mcpsdk.CallToolRequest, in hashIn) 
 	if torr.GetTorrent(in.Hash) == nil {
 		return nil, okOut{}, fmt.Errorf("torrent not found")
 	}
-	torr.RemTorrent(in.Hash)
+	if err := torr.RemTorrent(in.Hash); err != nil {
+		return nil, okOut{}, fmt.Errorf("torrent not removed: %w", err)
+	}
 	afterRemove(in.Hash)
 	return nil, okOut{OK: true, Hash: in.Hash, Message: "torrent removed"}, nil
 }

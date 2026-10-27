@@ -29,6 +29,8 @@ func cmdRemove(c tele.Context) error {
 		return c.Send(tr(c.Sender().ID, "torrent_not_found") + ":\n<code>" + hash + "</code>")
 	}
 
-	torr.RemTorrent(hash)
+	if err := torr.RemTorrent(hash); err != nil {
+		return c.Send(tr(c.Sender().ID, "error")+":\n"+escapeHtml(err.Error()), tele.ModeHTML)
+	}
 	return c.Send(fmt.Sprintf(tr(c.Sender().ID, "remove_done"), hash))
 }

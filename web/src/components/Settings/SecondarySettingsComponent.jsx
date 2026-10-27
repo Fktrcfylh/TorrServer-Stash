@@ -51,7 +51,6 @@ export default function SecondarySettingsComponent({ settings, inputForm, update
     TrackersListURL,
     DefaultTrackers,
     TorrentDisconnectTimeout,
-    DefaultPinNext,
     EnableDebug,
     EnableDLNA,
     EnableBonjour,
@@ -226,19 +225,6 @@ export default function SecondarySettingsComponent({ settings, inputForm, update
         }}
         value={TorrentDisconnectTimeout}
         type='number'
-        variant='outlined'
-        fullWidth
-      />
-      <br />
-      <TextField
-        onChange={inputForm}
-        margin='normal'
-        id='DefaultPinNext'
-        label={t('SettingsDialog.DefaultPinNext')}
-        helperText={t('SettingsDialog.DefaultPinNextHint')}
-        value={DefaultPinNext}
-        type='number'
-        inputProps={{ min: 1 }}
         variant='outlined'
         fullWidth
       />

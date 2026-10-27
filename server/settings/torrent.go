@@ -11,13 +11,6 @@ import (
 	"server/log"
 )
 
-// Pin modes accepted by the API; off is stored as an empty string.
-const (
-	PinModeOff  = "off"
-	PinModeAll  = "all"
-	PinModeNext = "next"
-)
-
 type TorrentDB struct {
 	*torrent.TorrentSpec
 
@@ -29,10 +22,9 @@ type TorrentDB struct {
 	Timestamp int64 `json:"timestamp,omitempty"`
 	Size      int64 `json:"size,omitempty"`
 
-	PinMode       string `json:"pin_mode,omitempty"`
-	PinNext       int    `json:"pin_next,omitempty"`
-	PinAnchor     int    `json:"pin_anchor,omitempty"`
-	PinDownloaded []int  `json:"pin_downloaded,omitempty"`
+	// RemoteDownload marks a torrent added to the remote downloader (NAS).
+	// The stored row owns it: only SetTorrentRemoteDownload changes it.
+	RemoteDownload bool `json:"remote_download,omitempty"`
 }
 
 type File struct {
@@ -46,12 +38,9 @@ var mu sync.Mutex
 func AddTorrent(torr *TorrentDB) {
 	mu.Lock()
 	defer mu.Unlock()
-	// the pin is owned by the stored row: a general save never changes it
+	// the remote flag is owned by the stored row: a general save never changes it
 	if cur := getTorrentRow(torr.InfoHash); cur != nil {
-		torr.PinMode = cur.PinMode
-		torr.PinNext = cur.PinNext
-		torr.PinAnchor = cur.PinAnchor
-		torr.PinDownloaded = cur.PinDownloaded
+		torr.RemoteDownload = cur.RemoteDownload
 	}
 	// only the saved row is written, so a stale snapshot never reverts other rows
 	buf, err := json.Marshal(torr)
@@ -60,74 +49,23 @@ func AddTorrent(torr *TorrentDB) {
 	}
 }
 
-// SetTorrentPin updates only the pin mode and N of an existing row; off also
-// clears the downloaded file ids.
-func SetTorrentPin(hash metainfo.Hash, mode string, next int) bool {
+// SetTorrentRemoteDownload updates only the remote flag of an existing row.
+// It returns false, writing nothing, when there is no row.
+func SetTorrentRemoteDownload(hash metainfo.Hash, on bool) bool {
 	mu.Lock()
 	defer mu.Unlock()
 	db := getTorrentRow(hash)
 	if db == nil {
 		return false
 	}
-	db.PinMode = mode
-	db.PinNext = next
-	if mode == "" {
-		db.PinDownloaded = nil
-	}
+	db.RemoteDownload = on
 	buf, err := json.Marshal(db)
 	if err != nil {
-		log.TLogln("Error marshal torrent pin", hash.HexString(), err)
+		log.TLogln("Error marshal torrent remote flag", hash.HexString(), err)
 		return false
 	}
 	tdb.Set("Torrents", hash.HexString(), buf)
 	return true
-}
-
-// SetTorrentPinAnchor updates only the pin anchor (file id) of an existing row.
-func SetTorrentPinAnchor(hash metainfo.Hash, anchor int) bool {
-	mu.Lock()
-	defer mu.Unlock()
-	db := getTorrentRow(hash)
-	if db == nil {
-		return false
-	}
-	db.PinAnchor = anchor
-	buf, err := json.Marshal(db)
-	if err != nil {
-		log.TLogln("Error marshal torrent pin anchor", hash.HexString(), err)
-		return false
-	}
-	tdb.Set("Torrents", hash.HexString(), buf)
-	return true
-}
-
-// SetTorrentPinDownloaded updates only the downloaded file ids of an existing
-// pinned row.
-func SetTorrentPinDownloaded(hash metainfo.Hash, ids []int) bool {
-	mu.Lock()
-	defer mu.Unlock()
-	db := getTorrentRow(hash)
-	// an unpinned row keeps no downloaded ids, so a save racing pin off cannot
-	// store them again
-	if db == nil || db.PinMode == "" {
-		return false
-	}
-	db.PinDownloaded = ids
-	buf, err := json.Marshal(db)
-	if err != nil {
-		log.TLogln("Error marshal torrent pin downloaded", hash.HexString(), err)
-		return false
-	}
-	tdb.Set("Torrents", hash.HexString(), buf)
-	return true
-}
-
-// IsTorrentPinned reports whether the stored row has a pin of any mode.
-func IsTorrentPinned(hash metainfo.Hash) bool {
-	mu.Lock()
-	defer mu.Unlock()
-	db := getTorrentRow(hash)
-	return db != nil && db.PinMode != ""
 }
 
 // getTorrentRow reads one stored row; the caller holds mu.
@@ -136,11 +74,11 @@ func getTorrentRow(hash metainfo.Hash) *TorrentDB {
 	if len(buf) == 0 {
 		return nil
 	}
-	var db *TorrentDB
-	if err := json.Unmarshal(buf, &db); err != nil {
+	var torr *TorrentDB
+	if err := json.Unmarshal(buf, &torr); err != nil {
 		return nil
 	}
-	return db
+	return torr
 }
 
 func ListTorrent() []*TorrentDB {

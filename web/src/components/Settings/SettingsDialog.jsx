@@ -23,6 +23,7 @@ import TorznabSettings from './TorznabSettings'
 import TMDBSettings from './TMDBSettings'
 import GStreamerSettings from './GStreamerSettings'
 import WAFSettings from './WAFSettings'
+import RemoteDownloaderSettings from './RemoteDownloaderSettings'
 
 export default function SettingsDialog({ handleClose }) {
   const { t } = useTranslation()
@@ -50,8 +51,9 @@ export default function SettingsDialog({ handleClose }) {
   const tabSearch = 2
   const tabApp = 3
   const tabAccess = 4
-  const tabGStreamer = 5
-  const maxTab = gstAvailable ? tabGStreamer : tabAccess
+  const tabRemote = 5
+  const tabGStreamer = 6
+  const maxTab = gstAvailable ? tabGStreamer : tabRemote
 
   useEffect(() => {
     fetch(gstSettingsHost())
@@ -191,6 +193,8 @@ export default function SettingsDialog({ handleClose }) {
 
           <StyledTab label={t('SettingsDialog.Tabs.Access')} {...a11yProps(tabAccess)} />
 
+          <StyledTab label={t('SettingsDialog.Tabs.Remote')} {...a11yProps(tabRemote)} />
+
           {gstAvailable && (
             <StyledTab
               disabled={!isProMode}
@@ -260,6 +264,10 @@ export default function SettingsDialog({ handleClose }) {
 
               <TabPanel value={selectedTab} index={tabAccess} dir={direction}>
                 <WAFSettings onDirtyChange={setWAFDirty} />
+              </TabPanel>
+
+              <TabPanel value={selectedTab} index={tabRemote} dir={direction}>
+                <RemoteDownloaderSettings settings={settings} updateSettings={updateSettings} />
               </TabPanel>
 
               {gstAvailable && (

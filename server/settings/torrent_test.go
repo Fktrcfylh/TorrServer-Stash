@@ -2,7 +2,6 @@ package settings
 
 import (
 	"encoding/json"
-	"slices"
 	"testing"
 
 	"github.com/anacrolix/torrent"
@@ -43,172 +42,60 @@ func findRow(t *testing.T, hash metainfo.Hash) *TorrentDB {
 	return nil
 }
 
-func TestTorrentDBPinJSONRoundTrip(t *testing.T) {
-	in := &TorrentDB{
-		TorrentSpec:   &torrent.TorrentSpec{InfoHash: testHash(1)},
-		Title:         "t",
-		PinMode:       PinModeNext,
-		PinNext:       4,
-		PinAnchor:     2,
-		PinDownloaded: []int{1, 3},
-	}
-	buf, err := json.Marshal(in)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var out TorrentDB
-	if err := json.Unmarshal(buf, &out); err != nil {
-		t.Fatal(err)
-	}
-	if out.PinMode != PinModeNext || out.PinNext != 4 || out.PinAnchor != 2 || !slices.Equal(out.PinDownloaded, []int{1, 3}) {
-		t.Fatalf("round trip lost pin: %s -> %+v", buf, out)
-	}
+// legacyPinRow is a stored row written while the disk pin existed.
+func legacyPinRow(hash metainfo.Hash) string {
+	return `{"InfoHash":"` + hash.HexString() + `","title":"old","data":"x","timestamp":5,` +
+		`"pin_mode":"next","pin_next":3,"pin_anchor":2,"pin_downloaded":[1,2]}`
 }
 
-func TestTorrentDBWithoutPinKeysDecodesOff(t *testing.T) {
-	var out TorrentDB
-	if err := json.Unmarshal([]byte(`{"title":"old","data":"x","timestamp":5}`), &out); err != nil {
-		t.Fatal(err)
-	}
-	if out.PinMode != "" || out.PinNext != 0 || out.PinAnchor != 0 || out.PinDownloaded != nil {
-		t.Fatalf("old row decoded with pin: %+v", out)
-	}
-	buf, err := json.Marshal(&TorrentDB{Title: "old"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(buf) != `{"title":"old"}` {
-		t.Fatalf("unpinned row JSON changed: %s", buf)
-	}
-}
-
-func TestSetTorrentPinUpdatesOnlyModeAndNext(t *testing.T) {
+// Rows stored by the removed disk pin keep loading; the pin keys are ignored.
+func TestLegacyPinRowLoads(t *testing.T) {
 	withTestDB(t)
 	hash := testHash(1)
-	other := testHash(2)
-	AddTorrent(&TorrentDB{
-		TorrentSpec:   &torrent.TorrentSpec{InfoHash: hash},
-		Title:         "title",
-		Category:      "movie",
-		Data:          "data",
-		Timestamp:     10,
-		Size:          20,
-		PinMode:       PinModeAll,
-		PinNext:       1,
-		PinAnchor:     7,
-		PinDownloaded: []int{2, 5},
-	})
-	AddTorrent(&TorrentDB{TorrentSpec: &torrent.TorrentSpec{InfoHash: other}, Title: "other"})
+	tdb.Set("Torrents", hash.HexString(), []byte(legacyPinRow(hash)))
 
-	if !SetTorrentPin(hash, PinModeNext, 6) {
-		t.Fatal("SetTorrentPin returned false for an existing row")
-	}
 	got := findRow(t, hash)
 	if got == nil {
-		t.Fatal("row disappeared")
+		t.Fatal("legacy pin row not listed")
 	}
-	if got.PinMode != PinModeNext || got.PinNext != 6 {
-		t.Fatalf("pin not updated: mode=%q next=%d", got.PinMode, got.PinNext)
-	}
-	if got.Title != "title" || got.Category != "movie" || got.Data != "data" || got.Timestamp != 10 || got.Size != 20 ||
-		got.PinAnchor != 7 || !slices.Equal(got.PinDownloaded, []int{2, 5}) {
-		t.Fatalf("other fields changed: %+v", got)
-	}
-	if o := findRow(t, other); o == nil || o.Title != "other" || o.PinMode != "" || o.PinNext != 0 {
-		t.Fatalf("unrelated row changed: %+v", o)
+	if got.Title != "old" || got.Data != "x" || got.Timestamp != 5 {
+		t.Fatalf("legacy row fields lost: %+v", got)
 	}
 }
 
-func TestSetTorrentPinAnchorUpdatesOnlyAnchor(t *testing.T) {
+// A save of a legacy row rewrites it without the pin keys.
+func TestAddTorrentDropsLegacyPinKeys(t *testing.T) {
 	withTestDB(t)
 	hash := testHash(1)
-	other := testHash(2)
-	AddTorrent(&TorrentDB{
-		TorrentSpec:   &torrent.TorrentSpec{InfoHash: hash},
-		Title:         "title",
-		Category:      "movie",
-		Data:          "data",
-		Timestamp:     10,
-		Size:          20,
-		PinMode:       PinModeNext,
-		PinNext:       2,
-		PinAnchor:     1,
-		PinDownloaded: []int{2, 5},
-	})
-	AddTorrent(&TorrentDB{TorrentSpec: &torrent.TorrentSpec{InfoHash: other}, Title: "other"})
+	tdb.Set("Torrents", hash.HexString(), []byte(legacyPinRow(hash)))
 
-	if !SetTorrentPinAnchor(hash, 4) {
-		t.Fatal("SetTorrentPinAnchor returned false for an existing row")
+	row := findRow(t, hash)
+	row.Title = "edited"
+	AddTorrent(row)
+
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(tdb.Get("Torrents", hash.HexString()), &raw); err != nil {
+		t.Fatal(err)
 	}
-	got := findRow(t, hash)
-	if got == nil {
-		t.Fatal("row disappeared")
+	if string(raw["title"]) != `"edited"` {
+		t.Fatalf("edit not saved: %s", raw["title"])
 	}
-	if got.PinAnchor != 4 {
-		t.Fatalf("anchor = %d, want 4", got.PinAnchor)
-	}
-	if got.Title != "title" || got.Category != "movie" || got.Data != "data" || got.Timestamp != 10 || got.Size != 20 ||
-		got.PinMode != PinModeNext || got.PinNext != 2 || !slices.Equal(got.PinDownloaded, []int{2, 5}) {
-		t.Fatalf("other fields changed: %+v", got)
-	}
-	if o := findRow(t, other); o == nil || o.Title != "other" || o.PinAnchor != 0 {
-		t.Fatalf("unrelated row changed: %+v", o)
+	for _, key := range []string{"pin_mode", "pin_next", "pin_anchor", "pin_downloaded"} {
+		if _, ok := raw[key]; ok {
+			t.Errorf("saved row still has %s", key)
+		}
 	}
 }
 
-func TestSetTorrentPinAnchorMissingRow(t *testing.T) {
+// A corrupt row is skipped, the valid rows are still listed.
+func TestListTorrentSkipsCorruptRow(t *testing.T) {
 	withTestDB(t)
-	AddTorrent(&TorrentDB{TorrentSpec: &torrent.TorrentSpec{InfoHash: testHash(1)}, Title: "kept"})
-	before, _ := json.Marshal(ListTorrent())
+	tdb.Set("Torrents", testHash(2).HexString(), []byte(`{"title":`))
+	AddTorrent(&TorrentDB{TorrentSpec: &torrent.TorrentSpec{InfoHash: testHash(1)}, Title: "ok"})
 
-	if SetTorrentPinAnchor(testHash(9), 3) {
-		t.Fatal("SetTorrentPinAnchor returned true for a missing row")
-	}
-	after, _ := json.Marshal(ListTorrent())
-	if string(before) != string(after) {
-		t.Fatalf("DB changed:\nbefore %s\nafter  %s", before, after)
-	}
-	if findRow(t, testHash(9)) != nil {
-		t.Fatal("row created for a missing hash")
-	}
-}
-
-func TestSetTorrentPinMissingRow(t *testing.T) {
-	withTestDB(t)
-	AddTorrent(&TorrentDB{TorrentSpec: &torrent.TorrentSpec{InfoHash: testHash(1)}, Title: "kept"})
-	before, _ := json.Marshal(ListTorrent())
-
-	if SetTorrentPin(testHash(9), PinModeAll, 2) {
-		t.Fatal("SetTorrentPin returned true for a missing row")
-	}
-	after, _ := json.Marshal(ListTorrent())
-	if string(before) != string(after) {
-		t.Fatalf("DB changed:\nbefore %s\nafter  %s", before, after)
-	}
-}
-
-func TestAddTorrentKeepsStoredPin(t *testing.T) {
-	withTestDB(t)
-	hash := testHash(1)
-	AddTorrent(&TorrentDB{
-		TorrentSpec:   &torrent.TorrentSpec{InfoHash: hash},
-		Title:         "new",
-		PinMode:       PinModeNext,
-		PinNext:       2,
-		PinAnchor:     4,
-		PinDownloaded: []int{4, 5},
-	})
-	if got := findRow(t, hash); got == nil || got.PinMode != PinModeNext || got.PinNext != 2 {
-		t.Fatalf("new row did not take the given pin: %+v", got)
-	}
-
-	AddTorrent(&TorrentDB{TorrentSpec: &torrent.TorrentSpec{InfoHash: hash}, Title: "edited", PinMode: PinModeAll, PinNext: 9})
-	got := findRow(t, hash)
-	if got.Title != "edited" {
-		t.Fatalf("edit not saved: %q", got.Title)
-	}
-	if got.PinMode != PinModeNext || got.PinNext != 2 || got.PinAnchor != 4 || !slices.Equal(got.PinDownloaded, []int{4, 5}) {
-		t.Fatalf("general save changed the stored pin: %+v", got)
+	list := ListTorrent()
+	if len(list) != 1 || list[0].Title != "ok" {
+		t.Fatalf("list = %+v, want only the valid row", list)
 	}
 }
 
@@ -230,131 +117,63 @@ func TestAddTorrentWritesOnlyItsRow(t *testing.T) {
 	}
 }
 
-func TestIsTorrentPinned(t *testing.T) {
-	withTestDB(t)
-	AddTorrent(&TorrentDB{TorrentSpec: &torrent.TorrentSpec{InfoHash: testHash(1)}})
-	AddTorrent(&TorrentDB{TorrentSpec: &torrent.TorrentSpec{InfoHash: testHash(2)}})
-	SetTorrentPin(testHash(2), PinModeAll, 0)
-	AddTorrent(&TorrentDB{TorrentSpec: &torrent.TorrentSpec{InfoHash: testHash(3)}})
-	SetTorrentPin(testHash(3), PinModeNext, 2)
-	before, _ := json.Marshal(ListTorrent())
-
-	if IsTorrentPinned(testHash(9)) {
-		t.Fatal("missing row reported as pinned")
-	}
-	if IsTorrentPinned(testHash(1)) {
-		t.Fatal("unpinned row reported as pinned")
-	}
-	if !IsTorrentPinned(testHash(2)) {
-		t.Fatal("row pinned with all not reported as pinned")
-	}
-	if !IsTorrentPinned(testHash(3)) {
-		t.Fatal("row pinned with next not reported as pinned")
-	}
-	after, _ := json.Marshal(ListTorrent())
-	if string(before) != string(after) {
-		t.Fatalf("DB changed:\nbefore %s\nafter  %s", before, after)
-	}
-}
-
-func TestSetTorrentPinDownloadedUpdatesOnlyDownloaded(t *testing.T) {
+func TestSetTorrentRemoteDownloadWritesOnlyFlag(t *testing.T) {
 	withTestDB(t)
 	hash := testHash(1)
-	AddTorrent(&TorrentDB{
-		TorrentSpec:   &torrent.TorrentSpec{InfoHash: hash},
-		Title:         "title",
-		Data:          "data",
-		PinMode:       PinModeNext,
-		PinNext:       2,
-		PinAnchor:     3,
-		PinDownloaded: []int{1},
-	})
+	AddTorrent(&TorrentDB{TorrentSpec: &torrent.TorrentSpec{InfoHash: hash}, Title: "t", Timestamp: 7})
 
-	if !SetTorrentPinDownloaded(hash, []int{3, 4}) {
-		t.Fatal("SetTorrentPinDownloaded returned false for an existing row")
+	if !SetTorrentRemoteDownload(hash, true) {
+		t.Fatal("setter reported no row")
 	}
 	got := findRow(t, hash)
-	if !slices.Equal(got.PinDownloaded, []int{3, 4}) {
-		t.Fatalf("downloaded = %v, want [3 4]", got.PinDownloaded)
+	if got == nil || !got.RemoteDownload || got.Title != "t" || got.Timestamp != 7 {
+		t.Fatalf("row after set on: %+v", got)
 	}
-	if got.Title != "title" || got.Data != "data" || got.PinMode != PinModeNext || got.PinNext != 2 || got.PinAnchor != 3 {
-		t.Fatalf("other fields changed: %+v", got)
+	if !SetTorrentRemoteDownload(hash, false) {
+		t.Fatal("setter reported no row")
 	}
-
-	if !SetTorrentPinDownloaded(hash, nil) {
-		t.Fatal("SetTorrentPinDownloaded(nil) returned false for an existing row")
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(tdb.Get("Torrents", hash.HexString()), &raw); err != nil {
+		t.Fatal(err)
 	}
-	if got := findRow(t, hash); got.PinDownloaded != nil || got.PinMode != PinModeNext {
-		t.Fatalf("clear downloaded: %+v", got)
-	}
-}
-
-func TestSetTorrentPinDownloadedUnpinnedRow(t *testing.T) {
-	withTestDB(t)
-	hash := testHash(1)
-	AddTorrent(&TorrentDB{TorrentSpec: &torrent.TorrentSpec{InfoHash: hash}, Title: "unpinned", PinAnchor: 2})
-
-	if SetTorrentPinDownloaded(hash, []int{1}) {
-		t.Fatal("SetTorrentPinDownloaded returned true for an unpinned row")
-	}
-	if got := findRow(t, hash); got.PinDownloaded != nil {
-		t.Fatalf("unpinned row downloaded = %v", got.PinDownloaded)
-	}
-
-	// pin off racing a downloaded save: the save after off stores nothing
-	SetTorrentPin(hash, PinModeNext, 1)
-	SetTorrentPinDownloaded(hash, []int{1})
-	SetTorrentPin(hash, "", 0)
-	if SetTorrentPinDownloaded(hash, []int{1}) {
-		t.Fatal("SetTorrentPinDownloaded returned true after pin off")
-	}
-	if got := findRow(t, hash); got.PinDownloaded != nil || got.PinMode != "" {
-		t.Fatalf("row after off and late save: %+v", got)
+	if _, ok := raw["remote_download"]; ok {
+		t.Fatalf("off flag still stored: %s", tdb.Get("Torrents", hash.HexString()))
 	}
 }
 
-func TestSetTorrentPinDownloadedMissingRow(t *testing.T) {
+func TestSetTorrentRemoteDownloadWithoutRow(t *testing.T) {
 	withTestDB(t)
-	AddTorrent(&TorrentDB{TorrentSpec: &torrent.TorrentSpec{InfoHash: testHash(1)}, Title: "kept"})
-	before, _ := json.Marshal(ListTorrent())
-
-	if SetTorrentPinDownloaded(testHash(9), []int{1}) {
-		t.Fatal("SetTorrentPinDownloaded returned true for a missing row")
+	hash := testHash(2)
+	if SetTorrentRemoteDownload(hash, true) {
+		t.Fatal("setter reported success without a row")
 	}
-	after, _ := json.Marshal(ListTorrent())
-	if string(before) != string(after) {
-		t.Fatalf("DB changed:\nbefore %s\nafter  %s", before, after)
-	}
-	if findRow(t, testHash(9)) != nil {
-		t.Fatal("row created for a missing hash")
+	if findRow(t, hash) != nil {
+		t.Fatal("setter created a row")
 	}
 }
 
-func TestSetTorrentPinOffClearsDownloaded(t *testing.T) {
+// A general save never changes the stored flag; a new row takes the passed one.
+func TestAddTorrentKeepsStoredRemoteFlag(t *testing.T) {
 	withTestDB(t)
-	hash := testHash(1)
-	AddTorrent(&TorrentDB{
-		TorrentSpec:   &torrent.TorrentSpec{InfoHash: hash},
-		PinMode:       PinModeAll,
-		PinAnchor:     3,
-		PinDownloaded: []int{1, 2},
-	})
+	hash := testHash(3)
+	AddTorrent(&TorrentDB{TorrentSpec: &torrent.TorrentSpec{InfoHash: hash}, Title: "a"})
+	SetTorrentRemoteDownload(hash, true)
 
-	if !SetTorrentPin(hash, PinModeNext, 1) {
-		t.Fatal("SetTorrentPin(next) returned false")
-	}
-	if got := findRow(t, hash); !slices.Equal(got.PinDownloaded, []int{1, 2}) || got.PinAnchor != 3 {
-		t.Fatalf("next changed downloaded or anchor: %+v", got)
-	}
-
-	if !SetTorrentPin(hash, "", 0) {
-		t.Fatal("SetTorrentPin(off) returned false")
-	}
+	AddTorrent(&TorrentDB{TorrentSpec: &torrent.TorrentSpec{InfoHash: hash}, Title: "b"})
 	got := findRow(t, hash)
-	if got.PinDownloaded != nil || got.PinMode != "" {
-		t.Fatalf("off kept downloaded: %+v", got)
+	if got == nil || !got.RemoteDownload || got.Title != "b" {
+		t.Fatalf("save cleared the flag: %+v", got)
 	}
-	if got.PinAnchor != 3 {
-		t.Fatalf("off changed the anchor to %d", got.PinAnchor)
+
+	SetTorrentRemoteDownload(hash, false)
+	AddTorrent(&TorrentDB{TorrentSpec: &torrent.TorrentSpec{InfoHash: hash}, Title: "c", RemoteDownload: true})
+	if got := findRow(t, hash); got.RemoteDownload {
+		t.Fatal("save set the flag on an existing row")
+	}
+
+	fresh := testHash(4)
+	AddTorrent(&TorrentDB{TorrentSpec: &torrent.TorrentSpec{InfoHash: fresh}, RemoteDownload: true})
+	if got := findRow(t, fresh); got == nil || !got.RemoteDownload {
+		t.Fatalf("new row lost the passed flag: %+v", got)
 	}
 }

@@ -1,40 +1,136 @@
 package settings
 
-import "testing"
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+	"testing"
+)
 
-func TestSetDefaultConfigDefaultPinNext(t *testing.T) {
+func TestDefaultConfigRemoteDownloader(t *testing.T) {
 	withTestDB(t)
 	SetDefaultConfig()
-	if BTsets.DefaultPinNext != 3 {
-		t.Fatalf("DefaultPinNext = %d, want 3", BTsets.DefaultPinNext)
+	want := RemoteDownloaderConfig{Type: "transmission"}
+	if BTsets.RemoteDownloader != want {
+		t.Fatalf("RemoteDownloader = %+v, want %+v", BTsets.RemoteDownloader, want)
 	}
 }
 
-func TestSetBTSetsDefaultPinNext(t *testing.T) {
+func TestLoadBTSetsUpgradesMissingRemoteDownloader(t *testing.T) {
 	withTestDB(t)
-	for _, tc := range []struct{ in, want int }{{0, 3}, {-1, 3}, {5, 5}} {
-		SetBTSets(&BTSets{DefaultPinNext: tc.in})
-		if BTsets.DefaultPinNext != tc.want {
-			t.Errorf("SetBTSets(%d): DefaultPinNext = %d, want %d", tc.in, BTsets.DefaultPinNext, tc.want)
+	tdb.Set("Settings", "BitTorr", []byte(`{"CacheSize":1048576,"ReaderReadAHead":50}`))
+	BTsets = nil
+	loadBTSets()
+	if BTsets.RemoteDownloader.Type != "transmission" {
+		t.Fatalf("Type = %q, want transmission", BTsets.RemoteDownloader.Type)
+	}
+	if BTsets.RemoteDownloader.URL != "" {
+		t.Fatalf("URL = %q, want empty (disabled)", BTsets.RemoteDownloader.URL)
+	}
+	if BTsets.CacheSize != 1048576 {
+		t.Fatalf("CacheSize = %d, existing values must be kept", BTsets.CacheSize)
+	}
+}
+
+func TestLoadBTSetsKeepsRemoteDownloader(t *testing.T) {
+	withTestDB(t)
+	stored := RemoteDownloaderConfig{
+		Type:        "transmission",
+		URL:         "http://nas:9091/transmission/rpc",
+		Username:    "u",
+		Password:    "p",
+		DownloadDir: "/mnt/dl",
+	}
+	buf, err := json.Marshal(map[string]any{"ReaderReadAHead": 50, "RemoteDownloader": stored})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tdb.Set("Settings", "BitTorr", buf)
+	BTsets = nil
+	loadBTSets()
+	if BTsets.RemoteDownloader != stored {
+		t.Fatalf("RemoteDownloader = %+v, want %+v", BTsets.RemoteDownloader, stored)
+	}
+}
+
+func TestLoadBTSetsCorruptFallsBackToDefaults(t *testing.T) {
+	withTestDB(t)
+	tdb.Set("Settings", "BitTorr", []byte(`{not json`))
+	BTsets = nil
+	loadBTSets()
+	if BTsets == nil || BTsets.RemoteDownloader.Type != "transmission" {
+		t.Fatalf("corrupt config must fall back to defaults, got %+v", BTsets)
+	}
+}
+
+func TestSetBTSetsFillsEmptyRemoteType(t *testing.T) {
+	withTestDB(t)
+	SetBTSets(&BTSets{RemoteDownloader: RemoteDownloaderConfig{URL: "http://nas:9091/transmission/rpc"}})
+	if BTsets.RemoteDownloader.Type != "transmission" {
+		t.Fatalf("Type = %q, want transmission", BTsets.RemoteDownloader.Type)
+	}
+	if BTsets.RemoteDownloader.URL != "http://nas:9091/transmission/rpc" {
+		t.Fatalf("URL lost: %q", BTsets.RemoteDownloader.URL)
+	}
+}
+
+func TestSetBTSetsKeepsExplicitRemoteType(t *testing.T) {
+	withTestDB(t)
+	SetBTSets(&BTSets{RemoteDownloader: RemoteDownloaderConfig{Type: "other"}})
+	if BTsets.RemoteDownloader.Type != "other" {
+		t.Fatalf("Type = %q, an explicit type must not be overwritten", BTsets.RemoteDownloader.Type)
+	}
+}
+
+// The settings JSON uses PascalCase keys like every other BTSets field; the
+// web UI reads and writes them by these names.
+func TestRemoteDownloaderJSONKeys(t *testing.T) {
+	buf, err := json.Marshal(&BTSets{RemoteDownloader: RemoteDownloaderConfig{Type: "transmission", URL: "u"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(buf, &raw); err != nil {
+		t.Fatalf("unmarshal: %v (body %s)", err, buf)
+	}
+	var rd map[string]any
+	if err := json.Unmarshal(raw["RemoteDownloader"], &rd); err != nil {
+		t.Fatalf("no RemoteDownloader object in %s: %v", buf, err)
+	}
+	for _, k := range []string{"Type", "URL", "Username", "Password", "DownloadDir"} {
+		if _, ok := rd[k]; !ok {
+			t.Errorf("RemoteDownloader.%s missing in %s", k, buf)
 		}
 	}
 }
 
-func TestLoadBTSetsDefaultPinNext(t *testing.T) {
-	withTestDB(t)
-	for _, tc := range []struct {
-		stored string
-		want   int
-	}{
-		{`{"CacheSize":1}`, 3},
-		{`{"CacheSize":1,"DefaultPinNext":0}`, 3},
-		{`{"CacheSize":1,"DefaultPinNext":7}`, 7},
-	} {
-		tdb.Set("Settings", "BitTorr", []byte(tc.stored))
-		BTsets = nil
-		loadBTSets()
-		if BTsets.DefaultPinNext != tc.want {
-			t.Errorf("loadBTSets(%s): DefaultPinNext = %d, want %d", tc.stored, BTsets.DefaultPinNext, tc.want)
-		}
+// log.Println("Client config:", settings.BTsets) in torr/btserver.go prints
+// BTSets through String on every Connect; the password must not reach the log.
+func TestBTSetsStringMasksRemotePassword(t *testing.T) {
+	sets := &BTSets{RemoteDownloader: RemoteDownloaderConfig{Type: "transmission", URL: "http://nas:9091/transmission/rpc", Username: "admin", Password: "s3cret"}}
+	out := fmt.Sprintln("Client config:", sets)
+	if strings.Contains(out, "s3cret") {
+		t.Fatalf("logged config leaks the password: %s", out)
+	}
+	if !strings.Contains(out, `"Password":"***"`) || !strings.Contains(out, `"Username":"admin"`) {
+		t.Fatalf("logged config = %s, want masked password and the rest intact", out)
+	}
+	if sets.RemoteDownloader.Password != "s3cret" {
+		t.Fatalf("String must not modify the settings, Password = %q", sets.RemoteDownloader.Password)
+	}
+	// settings get marshals BTSets directly and still returns the password.
+	buf, err := json.Marshal(sets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(buf), `"Password":"s3cret"`) {
+		t.Fatalf("json.Marshal must keep the password for settings get: %s", buf)
+	}
+}
+
+func TestBTSetsStringEmptyPassword(t *testing.T) {
+	out := (&BTSets{}).String()
+	if !strings.Contains(out, `"Password":""`) {
+		t.Fatalf("empty password must stay empty, got %s", out)
 	}
 }

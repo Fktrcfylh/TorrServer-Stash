@@ -1,4 +1,4 @@
-import { Button, Dialog, DialogActions, DialogTitle } from '@material-ui/core'
+import { Button, Dialog, DialogActions, DialogContent, DialogContentText, DialogTitle } from '@material-ui/core'
 import ListItem from '@material-ui/core/ListItem'
 import ListItemIcon from '@material-ui/core/ListItemIcon'
 import ListItemText from '@material-ui/core/ListItemText'
@@ -9,7 +9,8 @@ import { useTranslation } from 'react-i18next'
 
 import UnsafeButton from './UnsafeButton'
 
-const fnRemoveAll = () => {
+// Resolves to null on success, else to the server error text (wipe fails when NAS-flagged torrents cannot be removed)
+const fnRemoveAll = () =>
   fetch(torrentsHost(), {
     method: 'post',
     body: JSON.stringify({ action: 'wipe' }),
@@ -18,13 +19,37 @@ const fnRemoveAll = () => {
       'Content-Type': 'application/json',
     },
   })
-}
+    .then(response =>
+      response.ok
+        ? null
+        : response
+            .json()
+            .then(body => body?.error || response.statusText)
+            .catch(() => response.statusText || String(response.status)),
+    )
+    .catch(error => error.message)
 
 export default function RemoveAll({ isOffline, isLoading }) {
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
+  const [isPending, setIsPending] = useState(false)
+  const [error, setError] = useState(null)
   const closeDialog = () => setOpen(false)
-  const openDialog = () => setOpen(true)
+  const openDialog = () => {
+    setError(null)
+    setOpen(true)
+  }
+  const removeAll = () => {
+    // UnsafeButton reads `disabled` only on mount, so a repeated click is ignored here
+    if (isPending) return
+    setError(null)
+    setIsPending(true)
+    fnRemoveAll().then(failure => {
+      setIsPending(false)
+      if (failure) setError(failure)
+      else closeDialog()
+    })
+  }
 
   return (
     <>
@@ -36,10 +61,15 @@ export default function RemoveAll({ isOffline, isLoading }) {
         <ListItemText primary={t('RemoveAll')} />
       </ListItem>
 
-      <Dialog open={open} onClose={closeDialog}>
+      <Dialog open={open} onClose={() => !isPending && closeDialog()}>
         <DialogTitle>{t('DeleteTorrents?')}</DialogTitle>
+        {error && (
+          <DialogContent>
+            <DialogContentText color='error'>{error}</DialogContentText>
+          </DialogContent>
+        )}
         <DialogActions>
-          <Button variant='outlined' onClick={closeDialog} color='secondary'>
+          <Button variant='outlined' onClick={closeDialog} disabled={isPending} color='secondary'>
             {t('Cancel')}
           </Button>
 
@@ -47,10 +77,7 @@ export default function RemoveAll({ isOffline, isLoading }) {
             timeout={5}
             startIcon={<DeleteIcon />}
             variant='contained'
-            onClick={() => {
-              fnRemoveAll()
-              closeDialog()
-            }}
+            onClick={removeAll}
             color='secondary'
             autoFocus
           >

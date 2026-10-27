@@ -15,7 +15,11 @@ func handleCallbackTorrent(c tele.Context, args []string) error {
 		if len(args) < 2 {
 			return c.Respond(&tele.CallbackResponse{Text: tr(c.Sender().ID, "callback_unknown")})
 		}
-		deleteTorrent(c)
+		if err := deleteTorrent(c); err != nil {
+			uid := c.Sender().ID
+			_ = c.Respond(&tele.CallbackResponse{Text: tr(uid, "error")})
+			return c.Send(tr(uid, "error")+":\n"+escapeHtml(err.Error()), tele.ModeHTML)
+		}
 		_ = c.Bot().Delete(c.Callback().Message)
 		return c.Respond(&tele.CallbackResponse{Text: tr(c.Sender().ID, "deleted")})
 	case "\fupload":

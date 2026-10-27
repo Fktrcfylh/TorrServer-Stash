@@ -58,10 +58,10 @@ export default function DialogTorrentDetailsContent({ closeDialog, torrent }) {
     upload_speed: uploadSpeed,
     torrent_size: torrentSize,
     file_stats: torrentFileList,
-    pin_mode: pinMode,
-    pin_next: pinNext,
-    pin_progress: pinProgress,
-    pin_error: pinError,
+    remote_download: remoteDownload,
+    remote_state: remoteState,
+    remote_progress: remoteProgress,
+    remote_error: remoteError,
   } = torrent
 
   const cache = useUpdateCache(hash)
@@ -104,6 +104,9 @@ export default function DialogTorrentDetailsContent({ closeDialog, torrent }) {
       } else setViewedFileList()
     })
   }, [hash])
+
+  // undefined while settings are loading
+  const remoteConfigured = settings ? Boolean(settings.RemoteDownloader?.URL) : undefined
 
   const preloadPerc = settings?.PreloadCache
   const preloadSize = (Capacity / 100) * preloadPerc
@@ -201,12 +204,11 @@ export default function DialogTorrentDetailsContent({ closeDialog, torrent }) {
                   name={name}
                   title={title}
                   setViewedFileList={setViewedFileList}
-                  pinMode={pinMode}
-                  pinNext={pinNext}
-                  pinProgress={pinProgress}
-                  pinError={pinError}
-                  useDisk={settings?.UseDisk}
-                  defaultPinNext={settings?.DefaultPinNext}
+                  remoteDownload={remoteDownload}
+                  remoteState={remoteState}
+                  remoteProgress={remoteProgress}
+                  remoteError={remoteError}
+                  remoteConfigured={remoteConfigured}
                 />
               </div>
             </MainSection>

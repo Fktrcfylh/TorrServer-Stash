@@ -38,17 +38,13 @@ export const SmallLabel = styled.div`
   `}
 `
 
-export const PinControls = styled.div`
-  margin-bottom: 30px;
+export const RemoteControls = styled.div`
+  margin: 10px 0 30px;
 
-  .pin-row {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 10px 20px;
-  }
-
-  .pin-next {
-    width: 140px;
+  .remote-status {
+    display: grid;
+    gap: 6px;
+    max-width: 400px;
+    margin: 4px 0 8px;
   }
 `

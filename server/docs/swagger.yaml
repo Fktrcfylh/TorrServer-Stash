@@ -96,6 +96,12 @@ definitions:
     properties:
       action:
         type: string
+      remote_downloader:
+        allOf:
+        - $ref: '#/definitions/settings.RemoteDownloaderConfig'
+        description: |-
+          RemoteDownloader is an optional unsaved config for test_remote; the
+          saved one is tested when it is absent.
       sets:
         $ref: '#/definitions/settings.BTSets'
     type: object
@@ -111,12 +117,14 @@ definitions:
         type: string
       link:
         type: string
-      pin_mode:
-        type: string
-      pin_next:
-        type: integer
       poster:
         type: string
+      remote_download:
+        description: |-
+          Required for action remote: true adds the torrent to the remote
+          downloader, false removes it there with its data.
+          A pointer: a missing key is rejected, it never means false.
+        type: boolean
       save_to_db:
         type: boolean
       title:
@@ -210,10 +218,6 @@ definitions:
         type: integer
       connectionsLimit:
         type: integer
-      defaultPinNext:
-        description: files to predownload for a "next" pin when the request omits
-          N, def 3
-        type: integer
       defaultTrackers:
         description: newline-separated announce URLs used as local/fallback list
         type: string
@@ -272,6 +276,10 @@ definitions:
       readerReadAHead:
         description: in percent, 5%-100%, [...S__X__E...] [S-E] not clean
         type: integer
+      remoteDownloader:
+        allOf:
+        - $ref: '#/definitions/settings.RemoteDownloaderConfig'
+        description: Remote downloader (LAN torrent client)
       removeCacheOnDrop:
         type: boolean
       responsiveMode:
@@ -333,6 +341,25 @@ definitions:
     - CategoryDefault
     - CategoryManual
     - CategoryAll
+  settings.RemoteDownloaderConfig:
+    properties:
+      downloadDir:
+        description: empty = the client's default download dir
+        type: string
+      password:
+        description: optional password
+        type: string
+      type:
+        description: 'client type: "transmission" or "qbittorrent"'
+        type: string
+      url:
+        description: Transmission RPC URL (http://nas:9091/transmission/rpc) or qBittorrent
+          Web UI URL (http://nas:8080)
+        type: string
+      username:
+        description: optional user (Transmission HTTP Basic, qBittorrent Web UI login)
+        type: string
+    type: object
   settings.TMDBConfig:
     properties:
       apikey:
@@ -453,18 +480,12 @@ definitions:
     type: object
   state.TorrentFileStat:
     properties:
-      completed:
-        type: integer
-      downloaded:
-        type: boolean
       id:
         type: integer
       length:
         type: integer
       path:
         type: string
-      pinned:
-        type: boolean
     type: object
   state.TorrentStat:
     enum:
@@ -534,20 +555,30 @@ definitions:
         type: integer
       pieces_dirtied_good:
         type: integer
-      pin_error:
-        type: string
-      pin_mode:
-        type: string
-      pin_next:
-        type: integer
-      pin_progress:
-        type: integer
       poster:
         type: string
       preload_size:
         type: integer
       preloaded_bytes:
         type: integer
+      remote_download:
+        type: boolean
+      remote_error:
+        description: |-
+          RemoteError is the client's error text for the torrent, or why its
+          status could not be read (client unreachable, RPC error).
+        type: string
+      remote_progress:
+        description: |-
+          RemoteProgress is the remote download progress in percent (0..100);
+          present, also at 0, whenever the client reported the torrent.
+        type: number
+      remote_state:
+        description: |-
+          RemoteState is the torrent's state in the remote downloader
+          (downloading, seeding, queued, stopped, checking, error, missing); only
+          for flagged torrents, absent until the first status refresh.
+        type: string
       stat:
         $ref: '#/definitions/state.TorrentStat'
       stat_string:
@@ -1154,7 +1185,10 @@ paths:
       - application/json
       description: Allow to get or set server settings.
       parameters:
-      - description: 'Settings request. Available params for action: get, set, def'
+      - description: 'Settings request. Available params for action: get, set, def,
+          test_remote. test_remote checks the remote downloader in remote_downloader
+          (or the saved one) and returns remotedl.SessionInfo; 400 on bad config,
+          502 when the client fails.'
         in: body
         name: request
         required: true
@@ -1647,13 +1681,14 @@ paths:
     post:
       consumes:
       - application/json
-      description: Allow to list, add, remove, get, set, drop, wipe, pin torrents
-        on server. The action depends of what has been asked.
+      description: |-
+        Allow to list, add, remove, get, set, drop, wipe torrents on server, and to add a torrent to / remove it from the remote downloader (remote). The action depends of what has been asked.
+        remote: synchronous; remote_download=true runs torrent-add, false runs torrent-remove with its data (nothing is sent when the torrent is not flagged). The flag is saved only on success.
+        rem/wipe of a torrent flagged for the remote downloader remove it there first; on failure the torrent is kept and an error is returned.
       parameters:
       - description: 'Torrent request. Available params for action: add, get, set,
-          rem, list, drop, wipe, pin. link required for add, hash required for get,
-          set, rem, drop, pin. pin_mode (off, all, next) required for pin; pin_next
-          optional (>= 0, default DefaultPinNext).'
+          rem, list, drop, wipe, remote. link required for add, hash required for
+          get, set, rem, drop, remote; remote_download required for remote.'
         in: body
         name: request
         required: true
@@ -1663,7 +1698,39 @@ paths:
       - application/json
       responses:
         "200":
-          description: OK
+          description: 'add, get, remote: torrent status'
+          schema:
+            $ref: '#/definitions/state.TorrentStatus'
+        "400":
+          description: bad request, or remote downloader not configured
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: 'remote: read-only DB mode'
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: 'remote: torrent not found'
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: 'remote: torrent not in DB and its info is not loaded yet'
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "502":
+          description: 'remote, rem, wipe: remote downloader RPC failed'
+          schema:
+            additionalProperties:
+              type: string
+            type: object
       security:
       - BasicAuth: []
       summary: Handle torrents informations
